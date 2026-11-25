@@ -178,7 +178,21 @@ std::vector<float> RL::ComputeObservation()
     {
         obs.insert(obs.end(), obs_vec.begin(), obs_vec.end());
     }
-    std::vector<float> clamped_obs = clamp(obs, -this->params.Get<float>("clip_obs"), this->params.Get<float>("clip_obs"));
+    std::vector<float> clamped_obs;
+    if (this->params.Has("clip_obs_lower") || this->params.Has("clip_obs_upper"))
+    {
+        auto lower = this->params.Get<std::vector<float>>("clip_obs_lower");
+        auto upper = this->params.Get<std::vector<float>>("clip_obs_upper");
+        if (lower.size() != obs.size() || upper.size() != obs.size())
+        {
+            throw std::runtime_error("Observation clip limits must match the assembled observation size");
+        }
+        clamped_obs = clamp(obs, lower, upper);
+    }
+    else
+    {
+        clamped_obs = clamp(obs, -this->params.Get<float>("clip_obs"), this->params.Get<float>("clip_obs"));
+    }
     return clamped_obs;
 }
 
@@ -263,10 +277,31 @@ void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &ou
         pos_actions_scaled[i] = 0.0f;
         vel_actions_scaled[i] = actions_scaled[i];
     }
-    std::vector<float> all_actions_scaled = pos_actions_scaled + vel_actions_scaled;
     output_dof_pos = pos_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos");
     output_dof_vel = vel_actions_scaled;
-    output_dof_tau = this->params.Get<std::vector<float>>("rl_kp") * (all_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos") - this->obs.dof_pos) - this->params.Get<std::vector<float>>("rl_kd") * this->obs.dof_vel;
+    // Isaac Lab clips processed joint targets, keeping the raw action for the
+    // next observation. Apply these optional limits after scaling and offsets.
+    auto clip_target = [this](std::vector<float>& target, const std::string& prefix)
+    {
+        const std::string lower_key = prefix + "_lower";
+        const std::string upper_key = prefix + "_upper";
+        if (!this->params.Has(lower_key) && !this->params.Has(upper_key)) return;
+        auto lower = this->params.Get<std::vector<float>>(lower_key);
+        auto upper = this->params.Get<std::vector<float>>(upper_key);
+        if (lower.size() != target.size() || upper.size() != target.size())
+        {
+            throw std::runtime_error(prefix + " limits must match num_of_dofs");
+        }
+        for (size_t i = 0; i < target.size(); ++i)
+        {
+            if (lower[i] > upper[i]) throw std::runtime_error(prefix + " lower limit exceeds upper limit");
+        }
+        target = clamp(target, lower, upper);
+    };
+    clip_target(output_dof_pos, "clip_dof_pos");
+    clip_target(output_dof_vel, "clip_dof_vel");
+    output_dof_tau = this->params.Get<std::vector<float>>("rl_kp") * (output_dof_pos - this->obs.dof_pos)
+                   + this->params.Get<std::vector<float>>("rl_kd") * (output_dof_vel - this->obs.dof_vel);
     output_dof_tau = clamp(output_dof_tau, -this->params.Get<std::vector<float>>("torque_limits"), this->params.Get<std::vector<float>>("torque_limits"));
 }
 

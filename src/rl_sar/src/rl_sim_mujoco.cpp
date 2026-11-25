@@ -83,6 +83,11 @@ RL_Sim::RL_Sim(int argc, char **argv)
 
     // read params from yaml
     this->ReadYaml(this->robot_name, "base.yaml");
+    if (this->params.Has("initial_keyframe"))
+    {
+        const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        this->ResetSimulation();
+    }
 
     // auto load FSM by robot_name
     if (FSMManager::GetInstance().IsTypeSupported(this->robot_name))
@@ -187,10 +192,38 @@ void RL_Sim::SetCommand(const RobotCommand<float> *command)
     }
 }
 
+void RL_Sim::ResetSimulation()
+{
+    if (!this->mj_model || !this->mj_data) return;
+    const std::string keyframe = this->params.Get<std::string>("initial_keyframe");
+    if (keyframe.empty())
+    {
+        mj_resetData(this->mj_model, this->mj_data);
+    }
+    else
+    {
+        const int key = mj_name2id(this->mj_model, mjOBJ_KEY, keyframe.c_str());
+        if (key < 0) throw std::runtime_error("Initial keyframe does not exist: " + keyframe);
+        mj_resetDataKeyframe(this->mj_model, this->mj_data, key);
+    }
+    mj_forward(this->mj_model, this->mj_data);
+}
+
 void RL_Sim::RobotControl()
 {
     // Lock the sim mutex once for the entire control cycle to prevent race conditions
     const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+
+    const std::string track_body = this->params.Get<std::string>("camera_track_body");
+    if (!track_body.empty())
+    {
+        const int body = mj_name2id(this->mj_model, mjOBJ_BODY, track_body.c_str());
+        if (body >= 0)
+        {
+            sim->cam.type = mjCAMERA_TRACKING;
+            sim->cam.trackbodyid = body;
+        }
+    }
 
     this->GetState(&this->robot_state);
 
@@ -198,11 +231,7 @@ void RL_Sim::RobotControl()
 
     if (this->control.current_keyboard == Input::Keyboard::R || this->control.current_gamepad == Input::Gamepad::RB_Y)
     {
-        if (this->mj_model && this->mj_data)
-        {
-            mj_resetData(this->mj_model, this->mj_data);
-            mj_forward(this->mj_model, this->mj_data);
-        }
+        this->ResetSimulation();
     }
     if (this->control.current_keyboard == Input::Keyboard::Enter || this->control.current_gamepad == Input::Gamepad::RB_X)
     {

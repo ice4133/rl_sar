@@ -20,10 +20,19 @@ setup_inference_runtime() {
 
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
     DOWNLOAD_SCRIPT="${SCRIPT_DIR}/scripts/download_inference_runtime.sh"
+    local inference_runtime="${INFERENCE_RUNTIME:-all}"
+
+    case "$inference_runtime" in
+        all|libtorch|onnx) ;;
+        *)
+            print_error "INFERENCE_RUNTIME must be all, libtorch, or onnx"
+            exit 1
+            ;;
+    esac
 
     if [ -f "$DOWNLOAD_SCRIPT" ]; then
-        print_info "Checking inference libraries..."
-        bash "$DOWNLOAD_SCRIPT" || {
+        print_info "Checking inference libraries (${inference_runtime})..."
+        bash "$DOWNLOAD_SCRIPT" "$inference_runtime" || {
             print_error "Failed to setup inference libraries"
             exit 1
         }
@@ -97,7 +106,7 @@ run_mujoco_build() {
     print_separator
 
     cmake src/rl_sar/ -B cmake_build -DUSE_CMAKE=ON -DUSE_MUJOCO=ON
-    cmake --build cmake_build -j$(nproc 2>/dev/null || echo 4)
+    cmake --build cmake_build --target rl_sim_mujoco -j$(nproc 2>/dev/null || echo 4)
 
     print_success "MuJoCo build completed!"
 }
@@ -356,6 +365,10 @@ show_usage() {
     echo -e "  $0 --clean package1   # Clean specific package and build artifacts"
     echo -e "  $0 -m                 # Build with CMake for hardware deployment"
     echo -e "  $0 -mj                # Build with CMake and MuJoCo simulator support"
+    echo ""
+    echo -e "${COLOR_INFO}Environment:${COLOR_RESET}"
+    echo "  INFERENCE_RUNTIME=all|libtorch|onnx  Libraries to download (default: all)"
+    echo "  INFERENCE_RUNTIME=libtorch $0 -mj   # Build for TorchScript policies"
 }
 
 main() {

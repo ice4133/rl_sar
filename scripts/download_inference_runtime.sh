@@ -125,8 +125,8 @@ download_libtorch() {
 
     # Download
     if command -v curl &> /dev/null; then
-        curl -L --progress-bar -o "${archive_path}" "${url}" || {
-            print_error "Download failed"
+        curl --fail -L --progress-bar -o "${archive_path}" "${url}" || {
+            print_error "Download failed: ${url}"
             rm -f "${archive_path}"
             exit 1
         }
@@ -223,8 +223,8 @@ download_onnxruntime() {
 
     # Download
     if command -v curl &> /dev/null; then
-        curl -L --progress-bar -o "${archive_path}" "${url}" || {
-            print_error "Download failed"
+        curl --fail -L --progress-bar -o "${archive_path}" "${url}" || {
+            print_error "Download failed: ${url}"
             rm -f "${archive_path}"
             exit 1
         }

@@ -66,6 +66,7 @@ private:
     void SetCommand(const RobotCommand<float> *command) override;
     void RunModel();
     void RobotControl();
+    void ResetSimulation();
 
     // loop
     std::shared_ptr<LoopFunc> loop_keyboard;

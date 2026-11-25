@@ -123,6 +123,12 @@ sudo apt install ros-$ROS_DISTRO-teleop-twist-keyboard ros-$ROS_DISTRO-ros2-cont
 ./build.sh -mj  # or ./build.sh --mujoco
 ```
 
+此模式只编译 MuJoCo 仿真程序。默认下载 LibTorch 和 ONNX Runtime；如果只运行 TorchScript `.pt` 策略，可以只下载 LibTorch：
+
+```bash
+INFERENCE_RUNTIME=libtorch ./build.sh -mj
+```
+
 详细的使用说明可以通过`./build.sh -h`查看
 
 ```bash
@@ -197,6 +203,37 @@ git clone https://github.com/osrf/gazebo_models.git ~/.gazebo/models
 ./cmake_build/bin/rl_sim_mujoco <ROBOT> <SCENE>
 # Example: ./cmake_build/bin/rl_sim_mujoco g1 scene_29dof
 ```
+
+ICE Robocon 使用品牌/型号名称 `ice/robocon`，本地模型、配置和导出的策略已放在对应目录：
+
+```bash
+./scripts/run_ice_robocon.sh
+# 等价命令：./cmake_build/bin/rl_sim_mujoco ice/robocon scene
+```
+
+在启动程序的终端按 `0` 起立，完成后按 `1` 启用策略；`W/S` 调整前进速度，`A/D` 调整横移速度，`Q/E` 调整转向速度，空格将速度指令归零。`R` 恢复训练默认姿态，`Enter` 暂停/继续仿真。
+
+策略配置在 `policy/ice/robocon/base.yaml` 和 `policy/ice/robocon/robot_lab/config.yaml`；`source.yaml` 记录训练配置来源和 checkpoint 哈希。模型资源位于 `src/rl_sar_zoo/ice/robocon_description/`，其中包含原始 URDF、网格和部署用 MJCF。该资源目录属于单独下载的 `rl_sar_zoo` 仓库，不由本仓库跟踪。
+
+更新 Robocon 的训练结果时，使用保存的 `params/env.yaml`、`params/agent.yaml` 和 checkpoint 重新导入。脚本复用 `scripts/convert_urdf.py`（来自本地 `unitree_rl_mjlab`），并补齐浮动基座、执行器、传感器、初始姿态和场景；输入 URDF 和训练结果保持原样。
+
+```bash
+# 使用独立环境，版本与 C++ 部署运行库一致；只需准备一次
+python3 -m venv --system-site-packages .venv-deploy
+.venv-deploy/bin/python -m pip install 'torch==2.3.0+cpu' --index-url https://download.pytorch.org/whl/cpu
+.venv-deploy/bin/python -m pip install 'numpy<2' 'mujoco==3.2.7' PyYAML
+
+.venv-deploy/bin/python scripts/import_ice_robocon.py \
+  --run-dir /home/ice/robot_lab/logs \
+  --asset-root /home/ice/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon \
+  --checkpoint model_4999.pt --force
+
+INFERENCE_RUNTIME=libtorch ./build.sh -mj
+cmake --build cmake_build --target test_ice_robocon -j2
+./cmake_build/bin/test_ice_robocon
+```
+
+导入脚本仅支持当前 Robocon 的无历史帧、无观测归一化 ELU MLP 策略。它按保存的训练配置展开关节参数和左右轮速度符号，并在动作缩放后裁剪目标；原始动作仍用于下一帧观测。改变策略结构或观测定义时，需要同步适配导入和部署代码。
 
 #### Docker
 

@@ -13,6 +13,7 @@
 #include "fsm_g1.hpp"
 #include "fsm_go2.hpp"
 #include "fsm_go2w.hpp"
+#include "fsm_ice_robocon.hpp"
 #include "fsm_gr1t1.hpp"
 #include "fsm_gr1t2.hpp"
 #include "fsm_l4w4.hpp"

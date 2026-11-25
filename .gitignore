@@ -14,6 +14,7 @@ Cargo.lock
 
 # Python
 __pycache__
+.venv-deploy/
 
 # IDE
 .vscode

@@ -712,6 +712,11 @@ if(USE_MUJOCO)
         Threads::Threads mujoco_prebuilt glfw
     )
 
+    add_executable(test_ice_robocon EXCLUDE_FROM_ALL test/test_ice_robocon.cpp)
+    target_link_libraries(test_ice_robocon
+        rl_sdk observation_buffer ${YAML_CPP_LIBRARIES} mujoco_prebuilt
+    )
+
     # macOS specific frameworks and libraries
     if(SYSTEM_TYPE STREQUAL "Darwin")
         # OpenMP support

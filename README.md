@@ -123,6 +123,12 @@ To use the Mujoco simulator
 ./build.sh -mj  # or ./build.sh --mujoco
 ```
 
+This mode builds only the MuJoCo simulator. By default, both LibTorch and ONNX Runtime are downloaded. For TorchScript `.pt` policies, you can download only LibTorch:
+
+```bash
+INFERENCE_RUNTIME=libtorch ./build.sh -mj
+```
+
 For detailed usage instructions, you can check them via `./build.sh -h`:
 
 ```bash
@@ -197,6 +203,21 @@ git clone https://github.com/osrf/gazebo_models.git ~/.gazebo/models
 ./cmake_build/bin/rl_sim_mujoco <ROBOT> <SCENE>
 # Example: ./cmake_build/bin/rl_sim_mujoco g1 scene_29dof
 ```
+
+For the configured ICE Robocon robot, run `./scripts/run_ice_robocon.sh`, or
+`./cmake_build/bin/rl_sim_mujoco ice/robocon scene`. In the launching terminal,
+press `0` to stand, then `1` to enable the policy. Use `W/S`, `A/D`, and `Q/E`
+for velocity commands, Space to clear them, and `R` to restore the home pose.
+
+Configuration and the exported policy are in `policy/ice/robocon/`. URDF,
+meshes and MJCF are in `src/rl_sar_zoo/ice/robocon_description/`, inside the
+separately downloaded model repository. `scripts/import_ice_robocon.py` imports
+the saved training configuration, exports an unnormalized ELU MLP checkpoint,
+and prepares MuJoCo actuators, sensors and a home keyframe using the URDF
+converter adapted from the local `unitree_rl_mjlab` project. See the Chinese
+README for the import commands and supported policy format. To check the
+deployed policy without a GUI, build target `test_ice_robocon` and run
+`./cmake_build/bin/test_ice_robocon`.
 
 #### Docker
 

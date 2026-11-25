@@ -1,0 +1,9 @@
+task: RobotLab-Isaac-Velocity-Flat-ICE-Robocon-v0
+checkpoint: /home/ice/robot_lab/logs/model_4999.pt
+checkpoint_sha256: 9220a6d247748e8d90ca81de5095a5b97203c1a56161ca64bfc0a82849364713
+iteration: 4999
+source_env: /home/ice/robot_lab/logs/params/env.yaml
+source_agent: /home/ice/robot_lab/logs/params/agent.yaml
+source_urdf: /home/ice/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon/urdf/robocon.urdf
+torch_version: 2.3.0+cpu
+mujoco_version: 3.2.7
