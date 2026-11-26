@@ -95,6 +95,7 @@ private:
     // mujoco
     mjData *mj_data;
     mjModel *mj_model;
+    std::thread physics_thread;
     std::string scene_name;
 
     // joystick

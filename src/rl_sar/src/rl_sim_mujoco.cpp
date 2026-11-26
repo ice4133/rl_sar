@@ -67,8 +67,7 @@ RL_Sim::RL_Sim(int argc, char **argv)
     std::string filename = std::string(CMAKE_CURRENT_SOURCE_DIR) + "/../rl_sar_zoo/" + this->robot_name + "_description/mjcf/" + this->scene_name + ".xml";
 
     // start physics thread
-    std::thread physicsthreadhandle(&PhysicsThread, sim.get(), filename.c_str());
-    physicsthreadhandle.detach();
+    physics_thread = std::thread(&PhysicsThread, sim.get(), filename.c_str());
 
     while (1)
     {
@@ -169,8 +168,8 @@ RL_Sim::RL_Sim(int argc, char **argv)
         const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
         // While paused, still process keyboard/FSM input so Enter can resume.
         if (!this->physics_sync_control || !sim->run) this->RobotControl();
-    });
-    this->loop_rl = std::make_shared<LoopFunc>("loop_rl", this->params.Get<float>("dt") * this->params.Get<int>("decimation"), std::bind(&RL_Sim::RunModel, this));
+    }, -1, true);
+    this->loop_rl = std::make_shared<LoopFunc>("loop_rl", this->params.Get<float>("dt") * this->params.Get<int>("decimation"), std::bind(&RL_Sim::RunModel, this), -1, true);
     this->loop_control->start();
     if (!this->physics_sync_control) this->loop_rl->start();
 
@@ -178,7 +177,7 @@ RL_Sim::RL_Sim(int argc, char **argv)
     // keyboard controls through the window's press/release callbacks instead.
 
     // joystick
-    this->loop_joystick = std::make_shared<LoopFunc>("loop_joystick", 0.01, std::bind(&RL_Sim::GetSysJoystick, this));
+    this->loop_joystick = std::make_shared<LoopFunc>("loop_joystick", 0.01, std::bind(&RL_Sim::GetSysJoystick, this), -1, true);
     this->loop_joystick->start();
 
 #ifdef PLOT
@@ -187,7 +186,7 @@ RL_Sim::RL_Sim(int argc, char **argv)
     this->plot_target_joint_pos.resize(this->params.Get<int>("num_of_dofs"));
     for (auto &vector : this->plot_real_joint_pos) { vector = std::vector<float>(this->plot_size, 0); }
     for (auto &vector : this->plot_target_joint_pos) { vector = std::vector<float>(this->plot_size, 0); }
-    this->loop_plot = std::make_shared<LoopFunc>("loop_plot", 0.001, std::bind(&RL_Sim::Plot, this));
+    this->loop_plot = std::make_shared<LoopFunc>("loop_plot", 0.001, std::bind(&RL_Sim::Plot, this), -1, true);
     this->loop_plot->start();
 #endif
 #ifdef CSV_LOGGER
@@ -205,6 +204,7 @@ RL_Sim::~RL_Sim()
     {
         const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
         beforePhysicsStep = {};
+        sim->exitrequest.store(1);
     }
     // Clear static instance pointer
     instance = nullptr;
@@ -215,6 +215,16 @@ RL_Sim::~RL_Sim()
 #ifdef PLOT
     this->loop_plot->shutdown();
 #endif
+    if (physics_thread.joinable()) physics_thread.join();
+    // Release the viewer/GL driver before process-wide inference-library
+    // destructors run. GLFW's registered atexit cleanup is then a no-op.
+    sim.reset();
+    glfwTerminate();
+    // No control/physics task may access these objects after this point.
+    mj_deleteData(d);
+    mj_deleteModel(m);
+    mj_data = d = nullptr;
+    mj_model = m = nullptr;
     std::cout << LOGGER::INFO << "RL_Sim exit" << std::endl;
 }
 
@@ -326,6 +336,7 @@ void RL_Sim::RobotControl()
     }
     UpdateVelocityCommand();
     this->GetState(&this->robot_state);
+    ice_robocon_fsm::PrepareControl(*this, mj_data->time, sim->run != 0);
 
     // Read a coherent, current physics state before inference; consume the
     // resulting targets in the same control cycle through the existing FSM.

@@ -26,8 +26,15 @@
 class LoopFunc
 {
 public:
-    LoopFunc(const std::string &name, float period, std::function<void()> func, int bindCPU = -1)
-        : _name(name), _period(period), _func(func), _bindCPU(bindCPU), _running(false) {}
+    LoopFunc(const std::string &name, float period, std::function<void()> func, int bindCPU = -1,
+             bool join_on_shutdown = false)
+        : _name(name), _period(period), _func(func), _bindCPU(bindCPU),
+          _running(false), _join_on_shutdown(join_on_shutdown) {}
+
+    ~LoopFunc()
+    {
+        if (_join_on_shutdown && _thread.joinable()) shutdown();
+    }
 
     void start()
     {
@@ -43,7 +50,7 @@ public:
         {
             _thread = std::thread(&LoopFunc::loop, this);
         }
-        _thread.detach();
+        if (!_join_on_shutdown) _thread.detach();
     }
 
     void shutdown()
@@ -66,6 +73,7 @@ private:
     std::function<void()> _func;
     int _bindCPU;
     std::atomic<bool> _running;
+    bool _join_on_shutdown;
     std::mutex _mutex;
     std::condition_variable _cv;
     std::thread _thread;

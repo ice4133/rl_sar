@@ -357,6 +357,7 @@ show_usage() {
     echo -e "  -m, --cmake      Build using CMake (for hardware deployment only)"
     echo -e "  -mj,--mujoco     Build with MuJoCo simulator support (CMake only)"
     echo -e "  -h, --help       Show this help message"
+    echo -e "  --configure     Create package.xml symlinks for the active ROS version without building"
     echo ""
     echo -e "${COLOR_INFO}Examples:${COLOR_RESET}"
     echo -e "  $0                    # Build all ROS packages"
@@ -376,6 +377,7 @@ main() {
     local clean_mode=false
     local cmake_mode=false
     local mujoco_mode=false
+    local configure_mode=false
 
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -383,12 +385,27 @@ main() {
             -c|--clean) clean_mode=true; shift ;;
             -m|--cmake) cmake_mode=true; shift ;;
             -mj|--mujoco) cmake_mode=true; mujoco_mode=true; shift ;;
+            --configure) configure_mode=true; shift ;;
             -h|--help) show_usage; exit 0 ;;
             --) shift; packages+=("$@"); break ;;
             -*) print_error "Unknown option: $1"; show_usage; exit 1 ;;
             *) packages+=("$1"); shift ;;
         esac
     done
+
+    if [ "$configure_mode" = true ]; then
+        case "${ROS_DISTRO:-}" in
+            noetic|foxy|humble) ;;
+            *) print_error "Source a supported ROS environment (noetic, foxy, or humble) first"; exit 1 ;;
+        esac
+        cd "$SCRIPT_DIR"
+        if [ ${#packages[@]} -eq 0 ]; then
+            create_symlinks_for_all_packages
+        else
+            create_symlinks_for_specific_packages "${packages[@]}"
+        fi
+        exit 0
+    fi
 
     # Handle MuJoCo build mode
     if [ "$mujoco_mode" = true ]; then

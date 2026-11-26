@@ -99,6 +99,14 @@ sudo apt install ros-$ROS_DISTRO-teleop-twist-keyboard ros-$ROS_DISTRO-ros2-cont
 ./build.sh
 ```
 
+`src` 下的 `package.xml` 由脚本按 ROS 版本创建软链接。Humble 使用
+`package.ros2.xml`；如果只需补齐 XML 而暂不编译，执行：
+
+```bash
+source /opt/ros/humble/setup.bash
+./build.sh --configure
+```
+
 若想单独编译某几个包，可以在后面加上包名
 
 ```bash
@@ -204,7 +212,7 @@ git clone https://github.com/osrf/gazebo_models.git ~/.gazebo/models
 # Example: ./cmake_build/bin/rl_sim_mujoco g1 scene_29dof
 ```
 
-ICE Robocon 使用品牌/型号名称 `ice/robocon`，本地模型、配置和导出的策略已放在对应目录：
+ICE Robocon 使用品牌/型号名称 `ice/robocon`。配置和导出的策略随代码提供；模型资源目录不由本仓库跟踪，首次使用时需生成下文所述的 MJCF：
 
 ```bash
 ./scripts/run_ice_robocon.sh
@@ -213,9 +221,9 @@ ICE Robocon 使用品牌/型号名称 `ice/robocon`，本地模型、配置和�
 ./scripts/run_ice_robocon.sh scene --auto-policy
 ```
 
-默认以暂停状态等待手动操作。**点击 MuJoCo 窗口，使其获得键盘焦点**，按 `0` 起立，再按 `Enter` 开始仿真，等待约两秒后按 `1` 启用策略。按住 `W/S` 前后、`A/D` 横移、`Q/E` 转向，立即给出该方向的最大速度指令；松开该方向的按键就归零，支持组合按键，相反方向同时按下相互抵消。按住空格将所有速度指令归零。切换到其他窗口会清除键盘运动指令；`R` 复位，`Enter` 暂停/继续。`--auto-policy` 仅跳过手动启用策略的步骤，速度仍由键盘/手柄控制。
+默认以暂停状态等待手动操作。**点击 MuJoCo 窗口，使其获得键盘焦点**，按 `0` 起立，再按 `Enter` 开始仿真，等待约两秒后按 `1` 启用策略。按住 `W/S` 前后、`A/D` 横移、`Q/E` 转向，以该方向速度上限为目标平滑加速；松键或按住空格后，目标归零并按减速度限制停车，支持组合按键，相反方向相互抵消。键盘没有运动键按住时采用手柄，手柄仍被推动时松键会交回手柄。切换窗口会清除键盘按住状态。`0`/`9` 在策略状态下先减速、等待轮速和角速度稳定，再切换到站立/趴下；`1` 可取消尚未完成的普通停车请求。`P`/手柄 `LB+X` 直接切入阻尼，不等待普通停车。`R` 复位会重新进入当前状态并清除斜坡和旧策略目标；`Enter` 暂停/继续，暂停期间过渡进度保持不变。`--auto-policy` 从初始姿态直接进行平滑策略接管，速度仍由键盘/手柄控制。
 
-键盘和手柄摇杆共用 `policy/ice/robocon/base.yaml` 的 `command_limits_lower/upper`（依次为 vx、vy、wz）。当前范围来自保存的训练配置：前后 ±2.0 m/s、横移 ±0.3 m/s、转向 ±0.8 rad/s；按住 `W` 与左摇杆向前推到底都会给出 vx=2.0 m/s，摇杆半幅约为半速，回中归零。修改上下限并重启即可调整操作速度。这里的“最大速度”是给策略的目标指令，实际机身速度由策略和动力学决定。无相关配置的其他 MuJoCo 机器人默认各轴范围为 ±1。
+键盘和手柄摇杆共用 `policy/ice/robocon/base.yaml` 的 `command_limits_lower/upper`（依次为 vx、vy、wz）。当前范围来自保存的训练配置：前后 ±2.0 m/s、横移 ±0.3 m/s、转向 ±0.8 rad/s；按住 `W` 与左摇杆向前推到底都会以 vx=2.0 m/s 为目标，摇杆半幅约为半速，回中后平滑减速。`command_acceleration_limits` 和 `command_deceleration_limits` 分别控制三个方向的指令加速和减速，单位为 m/s²、m/s²、rad/s²；换向时先减到零，再反向加速。`getup_duration/getdown_duration` 控制起立和趴下时长，`policy_transition_duration` 控制策略接管时长，`stop_settle_duration` 控制普通退出前的稳定等待时间。修改后重启生效。这里限制的是给策略的指令，实际机身速度和停车距离仍由策略及动力学决定。其他机器人的 FSM 和输入处理保持原有行为。
 
 策略配置在 `policy/ice/robocon/base.yaml` 和 `policy/ice/robocon/robot_lab/config.yaml`；`source.yaml` 记录训练配置来源和 checkpoint 哈希。模型资源位于 `src/rl_sar_zoo/ice/robocon_description/`，其中包含原始 URDF、网格和部署用 MJCF。该资源目录属于单独下载的 `rl_sar_zoo` 仓库，不由本仓库跟踪。
 
@@ -233,6 +241,10 @@ bash scripts/setup_ice_robocon.sh
 
 ./cmake_build/bin/test_ice_robocon
 
+# ICE 状态机闭环：起立、接管、启停、反向、暂停、复位和正常/直接退出
+cmake --build cmake_build --target test_ice_fsm -j2
+./cmake_build/bin/test_ice_fsm
+
 # 固定仿真步长回放：站立、前进 0.5、横移 0.2、转向 0.6，共 22 秒
 .venv-deploy/bin/python scripts/eval_ice_robocon.py --video
 # 原 robot_lab / Newton 环境运行同一策略、同一段指令，关闭随机化和观测噪声
@@ -240,6 +252,19 @@ bash scripts/setup_ice_robocon.sh
 ```
 
 导入脚本仅支持当前 Robocon 的无历史帧、无观测归一化 ELU MLP 策略。它按保存的训练配置展开关节参数和左右轮速度符号，并在动作缩放后裁剪目标；原始动作仍用于下一帧观测。改变策略结构或观测定义时，需要同步适配导入和部署代码。
+
+如果现有 `policy.pt` 和 YAML 已经就绪，只缺少 `robocon.xml`、`scene.xml`
+及网格，使用 `--model-only`。此模式读取保存的 `params/env.yaml` 和现有策略配置，
+生成模型时保留策略、配置和来源记录，不需要原 checkpoint。下面是本机已有资源的示例：
+
+```bash
+.venv-deploy/bin/python scripts/import_ice_robocon.py --model-only \
+  --run-dir "$HOME/robot_lab/logs/rsl_rl/ice_robocon_flat/2026-11-24_16-06-21_robocon_motor_update_validation" \
+  --asset-root "$HOME/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon"
+
+# 资源已存在时，重新生成需追加 --force
+./scripts/run_ice_robocon.sh scene --auto-policy
+```
 
 Robocon 默认启用 `physics_sync_control`：物理步长 0.0025 s，每两个物理步更新一次 PD，每四次 PD 更新运行一次策略。运行中由物理线程读取一致状态并立即消费动作，暂停时仍处理窗口输入；调整 MuJoCo 播放速度不会改变控制的仿真周期。其他机器人保留原来的线程调度。
 

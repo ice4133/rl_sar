@@ -195,12 +195,29 @@ def main():
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--asset-root", type=Path, required=True)
     parser.add_argument("--checkpoint", default="model_4999.pt")
+    parser.add_argument("--model-only", action="store_true",
+                        help="Generate MJCF using the saved environment and existing policy configuration; keep policy files")
     parser.add_argument("--force", action="store_true", help="Replace generated Robocon files")
     args = parser.parse_args()
     project = Path(__file__).resolve().parent.parent
     run = args.run_dir.resolve()
     asset_root = args.asset_root.resolve()
     env = read_config(run / "params/env.yaml")
+    if args.model_only:
+        base = read_config(project / "policy/ice/robocon/base.yaml")["ice/robocon"]
+        config = read_config(project / "policy/ice/robocon/robot_lab/config.yaml")["ice/robocon/robot_lab"]
+        if env["joint_names"] != base["joint_names"]:
+            raise ValueError("Saved environment joint order differs from the deployed policy")
+        if not np.isclose(env["sim"]["dt"], base["dt"]):
+            raise ValueError("Saved environment timestep differs from the deployed policy")
+        scene = make_model(
+            asset_root, asset_root / "urdf/robocon.urdf",
+            project / "src/rl_sar_zoo/ice/robocon_description", env,
+            base["joint_names"], config["default_dof_pos"], config["torque_limits"], args.force,
+        )
+        print(f"Prepared model: {scene}")
+        print("Existing policy and configuration files retained.")
+        return
     agent = read_config(run / "params/agent.yaml")
     names = env["joint_names"]
     wheels = [names.index(name) for name in env["wheel_joint_names"]]

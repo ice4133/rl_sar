@@ -467,9 +467,8 @@ void PhysicsThread(mj::Simulate* sim, const char* filename) {
 
   PhysicsLoop(*sim);
 
-  // delete everything we allocated
-  mj_deleteData(d);
-  mj_deleteModel(m);
+  // The owning RL_Sim releases model/data after joining this thread and its
+  // control tasks. They may still need the final state during UI shutdown.
 }
 
 //------------------------------------------ main --------------------------------------------------
