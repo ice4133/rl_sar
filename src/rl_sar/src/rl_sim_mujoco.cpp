@@ -4,6 +4,7 @@
  */
 
 #include "rl_sim_mujoco.hpp"
+#include "robot_glfw_adapter.hpp"
 
 RL_Sim* RL_Sim::instance = nullptr;
 
@@ -57,8 +58,10 @@ RL_Sim::RL_Sim(int argc, char **argv)
     mjv_defaultPerturb(&pert);
 
     // simulate object encapsulates the UI
+    auto glfw_adapter = std::make_unique<RobotGlfwAdapter>();
+    auto* input_adapter = glfw_adapter.get();
     sim = std::make_unique<mj::Simulate>(
-        std::make_unique<mj::GlfwAdapter>(),
+        std::move(glfw_adapter),
         &cam, &opt, &pert, /* is_passive = */ false);
 
     std::string filename = std::string(CMAKE_CURRENT_SOURCE_DIR) + "/../rl_sar_zoo/" + this->robot_name + "_description/mjcf/" + this->scene_name + ".xml";
@@ -79,7 +82,7 @@ RL_Sim::RL_Sim(int argc, char **argv)
 
     this->mj_model = m;
     this->mj_data = d;
-    this->SetupSysJoystick("/dev/input/js0", 16); // 16 bits joystick
+    this->SetupSysJoystick("/dev/input/js0");
 
     // read params from yaml
     this->ReadYaml(this->robot_name, "base.yaml");
@@ -107,16 +110,72 @@ RL_Sim::RL_Sim(int argc, char **argv)
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
     this->InitOutputs();
     this->InitControl();
+    this->control.velocity_from_axes = true;
+    if (params.Has("command_limits_lower") || params.Has("command_limits_upper"))
+    {
+        const auto lower = params.Get<std::vector<float>>("command_limits_lower");
+        const auto upper = params.Get<std::vector<float>>("command_limits_upper");
+        if (lower.size() != 3 || upper.size() != 3)
+            throw std::runtime_error("Command limits must contain vx, vy and wz");
+        velocity_input.SetLimits({lower[0], lower[1], lower[2]}, {upper[0], upper[1], upper[2]});
+    }
+    input_adapter->robot_key = [this](int key, int action) { return WindowKey(key, action); };
+    input_adapter->robot_focus = [this](bool focused) {
+        const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        velocity_input.SetFocused(focused);
+    };
+    std::cout << LOGGER::NOTE << "Click the MuJoCo window: hold W/S, A/D, Q/E for full-scale velocity; release to stop."
+              << std::endl;
+
+    if (const char* path = std::getenv("RL_SAR_TELEMETRY"))
+    {
+        telemetry.open(path);
+        if (!telemetry) throw std::runtime_error("Cannot open telemetry CSV: " + std::string(path));
+        telemetry << "time,policy_step,cmd_vx,cmd_vy,cmd_wz,vx,vy,wz,height,tilt\n";
+    }
+    bool auto_policy = false;
+    for (int i = 3; i < argc; ++i)
+    {
+        if (std::string(argv[i]) == "--auto-policy")
+        {
+            auto_policy = true;
+            this->fsm.RequestStateChange("RLFSMStateRLLocomotion");
+        }
+        else throw std::runtime_error("Unknown simulator argument: " + std::string(argv[i]));
+    }
+    if (this->robot_name == "ice/robocon" && !auto_policy)
+    {
+        const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        sim->run = 0;
+        simulation_running = false;
+        std::cout << LOGGER::NOTE << "Manual start: focus the MuJoCo window. Press 0, then Enter, wait 2s, then 1."
+                  << std::endl;
+    }
+
+    this->physics_sync_control = this->params.Has("physics_sync_control") &&
+        this->params.Get<bool>("physics_sync_control");
+    if (this->physics_sync_control)
+    {
+        const double stride = this->params.Get<float>("dt") / this->mj_model->opt.timestep;
+        if (std::abs(stride - std::round(stride)) > 1e-5 || stride < 1.0)
+            throw std::runtime_error("Control dt must be an integer multiple of the MuJoCo timestep");
+        const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        beforePhysicsStep = [this]() { this->PhysicsControl(); };
+        std::cout << LOGGER::INFO << "Control and policy synchronized to MuJoCo simulation time" << std::endl;
+    }
 
     // loop
-    this->loop_control = std::make_shared<LoopFunc>("loop_control", this->params.Get<float>("dt"), std::bind(&RL_Sim::RobotControl, this));
+    this->loop_control = std::make_shared<LoopFunc>("loop_control", this->params.Get<float>("dt"), [this]() {
+        const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        // While paused, still process keyboard/FSM input so Enter can resume.
+        if (!this->physics_sync_control || !sim->run) this->RobotControl();
+    });
     this->loop_rl = std::make_shared<LoopFunc>("loop_rl", this->params.Get<float>("dt") * this->params.Get<int>("decimation"), std::bind(&RL_Sim::RunModel, this));
     this->loop_control->start();
-    this->loop_rl->start();
+    if (!this->physics_sync_control) this->loop_rl->start();
 
-    // keyboard
-    this->loop_keyboard = std::make_shared<LoopFunc>("loop_keyboard", 0.05, std::bind(&RL_Sim::KeyboardInterface, this));
-    this->loop_keyboard->start();
+    // Terminal character input has no key-release events. MuJoCo receives
+    // keyboard controls through the window's press/release callbacks instead.
 
     // joystick
     this->loop_joystick = std::make_shared<LoopFunc>("loop_joystick", 0.01, std::bind(&RL_Sim::GetSysJoystick, this));
@@ -143,10 +202,13 @@ RL_Sim::RL_Sim(int argc, char **argv)
 
 RL_Sim::~RL_Sim()
 {
+    {
+        const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        beforePhysicsStep = {};
+    }
     // Clear static instance pointer
     instance = nullptr;
 
-    this->loop_keyboard->shutdown();
     this->loop_joystick->shutdown();
     this->loop_control->shutdown();
     this->loop_rl->shutdown();
@@ -207,6 +269,38 @@ void RL_Sim::ResetSimulation()
         mj_resetDataKeyframe(this->mj_model, this->mj_data, key);
     }
     mj_forward(this->mj_model, this->mj_data);
+    this->next_control_time = 0.0;
+    this->control_tick = 0;
+}
+
+void RL_Sim::PhysicsControl()
+{
+    if (mj_model != m || mj_data != d)
+        throw std::runtime_error("Restart the controller after loading a different MuJoCo model");
+    const double dt = this->params.Get<float>("dt");
+    if (mj_data->time + dt < next_control_time) // UI reset or history rewind
+    {
+        next_control_time = mj_data->time;
+        control_tick = 0;
+    }
+    if (mj_data->time + 1e-7 < next_control_time) return;
+    next_control_time = mj_data->time + dt;
+    policy_step_due = (control_tick++ % this->params.Get<int>("decimation")) == 0;
+    RobotControl();
+    if (telemetry.is_open() && policy_step_due)
+    {
+        const std::string body_name = params.Get<std::string>("camera_track_body");
+        const int body = mj_name2id(mj_model, mjOBJ_BODY, body_name.c_str());
+        mjtNum velocity[6];
+        mj_objectVelocity(mj_model, mj_data, mjOBJ_XBODY, body, velocity, 1);
+        telemetry << mj_data->time << ',' << this->rl_init_done << ','
+                  << control.x << ',' << control.y << ',' << control.yaw << ','
+                  << velocity[3] << ',' << velocity[4] << ',' << velocity[2] << ','
+                  << mj_data->xpos[3*body+2] << ','
+                  << std::acos(std::clamp(mj_data->xmat[9*body+8], -1.0, 1.0)) << '\n';
+        telemetry.flush();
+    }
+    policy_step_due = false;
 }
 
 void RL_Sim::RobotControl()
@@ -225,7 +319,17 @@ void RL_Sim::RobotControl()
         }
     }
 
+    if (!window_keys.empty())
+    {
+        control.SetKeyboard(window_keys.front());
+        window_keys.pop_front();
+    }
+    UpdateVelocityCommand();
     this->GetState(&this->robot_state);
+
+    // Read a coherent, current physics state before inference; consume the
+    // resulting targets in the same control cycle through the existing FSM.
+    if (this->physics_sync_control && this->policy_step_due) this->RunModel();
 
     this->StateController(&this->robot_state, &this->robot_command);
 
@@ -235,7 +339,7 @@ void RL_Sim::RobotControl()
     }
     if (this->control.current_keyboard == Input::Keyboard::Enter || this->control.current_gamepad == Input::Gamepad::RB_X)
     {
-        if (simulation_running)
+        if (sim->run)
         {
             sim->run = 0;
             std::cout << std::endl << LOGGER::INFO << "Simulation Stop" << std::endl;
@@ -245,15 +349,58 @@ void RL_Sim::RobotControl()
             sim->run = 1;
             std::cout << std::endl << LOGGER::INFO << "Simulation Start" << std::endl;
         }
-        simulation_running = !simulation_running;
+        simulation_running = sim->run;
     }
 
     this->control.ClearInput();
+    this->control.current_keyboard = this->control.last_keyboard = Input::Keyboard::None;
 
     this->SetCommand(&this->robot_command);
 }
 
-void RL_Sim::SetupSysJoystick(const std::string& device, int bits)
+bool RL_Sim::WindowKey(int key, int action)
+{
+    const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+    VelocityInput::Key direction;
+    bool movement = true;
+    switch (key)
+    {
+    case GLFW_KEY_W: direction = VelocityInput::Forward; break;
+    case GLFW_KEY_S: direction = VelocityInput::Reverse; break;
+    case GLFW_KEY_A: direction = VelocityInput::Left; break;
+    case GLFW_KEY_D: direction = VelocityInput::Right; break;
+    case GLFW_KEY_Q: direction = VelocityInput::TurnLeft; break;
+    case GLFW_KEY_E: direction = VelocityInput::TurnRight; break;
+    case GLFW_KEY_SPACE: direction = VelocityInput::Stop; break;
+    default: movement = false; break;
+    }
+    if (movement)
+    {
+        velocity_input.SetKey(direction, action != GLFW_RELEASE);
+        return true; // Do not also invoke the viewer's Space/panel shortcuts.
+    }
+
+    Input::Keyboard event;
+    if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9)
+        event = static_cast<Input::Keyboard>(static_cast<int>(Input::Keyboard::Num0) + key - GLFW_KEY_0);
+    else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) event = Input::Keyboard::Enter;
+    else if (key == GLFW_KEY_R) event = Input::Keyboard::R;
+    else if (key == GLFW_KEY_P) event = Input::Keyboard::P;
+    else if (key == GLFW_KEY_N) event = Input::Keyboard::N;
+    else return false; // Preserve unrelated MuJoCo viewer controls.
+    if (action == GLFW_PRESS) window_keys.push_back(event);
+    return true; // Ignore repeat/release for discrete mode and pause commands.
+}
+
+void RL_Sim::UpdateVelocityCommand()
+{
+    const auto command = velocity_input.Command();
+    control.x = command[0];
+    control.y = command[1];
+    control.yaw = command[2];
+}
+
+void RL_Sim::SetupSysJoystick(const std::string& device)
 {
     this->sys_js = std::make_unique<Joystick>(device);
     if (!this->sys_js->isFound())
@@ -262,11 +409,11 @@ void RL_Sim::SetupSysJoystick(const std::string& device, int bits)
         // exit(1);
     }
 
-    this->sys_js_max_value = (1 << (bits - 1));
 }
 
 void RL_Sim::GetSysJoystick()
 {
+    const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
     // Clear all button event states
     for (int i = 0; i < 20; ++i)
     {
@@ -275,28 +422,21 @@ void RL_Sim::GetSysJoystick()
     }
 
     // Check if joystick is valid before using
-    if (!this->sys_js)
+    if (!this->sys_js || !this->sys_js->isFound())
     {
+        velocity_input.SetJoystick({0, 0, 0});
         return;
     }
 
     while (this->sys_js->sample(&this->sys_js_event))
     {
-        if (this->sys_js_event.isButton())
+        if (this->sys_js_event.isButton() && this->sys_js_event.number < 20)
         {
             this->sys_js_button[this->sys_js_event.number].update(this->sys_js_event.value);
         }
-        else if (this->sys_js_event.isAxis())
+        else if (this->sys_js_event.isAxis() && this->sys_js_event.number < 10)
         {
-            double normalized = double(this->sys_js_event.value) / this->sys_js_max_value;
-            if (std::abs(normalized) < this->axis_deadzone)
-            {
-                this->sys_js_axis[this->sys_js_event.number] = 0;
-            }
-            else
-            {
-                this->sys_js_axis[this->sys_js_event.number] = this->sys_js_event.value;
-            }
+            this->sys_js_axis[this->sys_js_event.number] = this->sys_js_event.value;
         }
     }
 
@@ -334,31 +474,16 @@ void RL_Sim::GetSysJoystick()
     if (this->sys_js_button[5].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
     if (this->sys_js_button[4].pressed && this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::LB_RB);
 
-    float ly = -float(this->sys_js_axis[1]) / float(this->sys_js_max_value);
-    float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
-    float rx = -float(this->sys_js_axis[3]) / float(this->sys_js_max_value);
-
-    bool has_input = (ly != 0.0f || lx != 0.0f || rx != 0.0f);
-
-    if (has_input)
-    {
-        this->control.x = ly;
-        this->control.y = lx;
-        this->control.yaw = rx;
-        this->sys_js_active = true;
-    }
-    else if (this->sys_js_active)
-    {
-        this->control.x = 0.0f;
-        this->control.y = 0.0f;
-        this->control.yaw = 0.0f;
-        this->sys_js_active = false;
-    }
+    if (!this->sys_js->isFound()) velocity_input.SetJoystick({0, 0, 0});
+    else velocity_input.SetJoystick({
+        -VelocityInput::NormalizeJoystickAxis(this->sys_js_axis[1], axis_deadzone),
+        -VelocityInput::NormalizeJoystickAxis(this->sys_js_axis[0], axis_deadzone),
+        -VelocityInput::NormalizeJoystickAxis(this->sys_js_axis[3], axis_deadzone)});
 }
 
 void RL_Sim::RunModel()
 {
-    if (this->rl_init_done && simulation_running)
+    if (this->rl_init_done && sim->run)
     {
         this->episode_length_buf += 1;
         this->obs.ang_vel = this->robot_state.imu.gyroscope;
@@ -387,7 +512,7 @@ void RL_Sim::RunModel()
         {
             output_dof_vel_queue.push(this->output_dof_vel);
         }
-        if (!this->output_dof_tau.empty())
+        if (!this->physics_sync_control && !this->output_dof_tau.empty())
         {
             output_dof_tau_queue.push(this->output_dof_tau);
         }

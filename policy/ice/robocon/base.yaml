@@ -5,6 +5,9 @@ ice/robocon:
   num_of_dofs: 16
   initial_keyframe: home
   camera_track_body: base_link
+  physics_sync_control: true
+  command_limits_lower: [-2.0, -0.3, -0.8]
+  command_limits_upper: [2.0, 0.3, 0.8]
   fixed_kp: [60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 0.0, 0.0, 0.0, 0.0]
   fixed_kd: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 0.5, 0.5, 0.5, 0.5]
   torque_limits: [31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 23.7, 23.7,

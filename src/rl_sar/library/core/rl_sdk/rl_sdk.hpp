@@ -119,6 +119,7 @@ struct Control
     float y = 0.0f;
     float yaw = 0.0f;
     bool navigation_mode = false;
+    bool velocity_from_axes = false;
 
     void SetKeyboard(Input::Keyboard keyboad)
     {

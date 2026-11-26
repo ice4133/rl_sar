@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.0+cpu
+numpy==1.26.4
+mujoco==3.2.7
+PyYAML==6.0.4
+imageio==2.38.2
+imageio-ffmpeg==0.8.1
+pillow==13.0.0

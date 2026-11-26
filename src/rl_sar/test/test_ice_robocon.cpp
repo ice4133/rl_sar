@@ -76,6 +76,10 @@ int main()
         mj_resetDataKeyframe(m.get(), d.get(), key);
         mj_forward(m.get(), d.get());
         const int base = mj_name2id(m.get(), mjOBJ_BODY, "base_link");
+        const int wheel_geom = mj_name2id(m.get(), mjOBJ_GEOM, "fr_foot_link_collision_0");
+        require(wheel_geom >= 0, "Missing wheel collision");
+        near(m->geom_friction[3*wheel_geom], 1.0f, "Newton shape friction differs from saved run");
+        near(m->geom_solref[2*wheel_geom], 2.0f/1100.0f, "Newton contact stiffness/damping mismatch");
         auto kp = rl.params.Get<std::vector<float>>("rl_kp");
         auto kd = rl.params.Get<std::vector<float>>("rl_kd");
         auto names = rl.params.Get<std::vector<std::string>>("joint_names");
@@ -90,6 +94,8 @@ int main()
         const int control_stride = std::lround(rl.params.Get<float>("dt") / m->opt.timestep);
         const int policy_stride = control_stride * rl.params.Get<int>("decimation");
         double min_height = 10.0, max_tilt = 0.0;
+        double forward_sum = 0.0, lateral_sum = 0.0, yaw_sum = 0.0;
+        int forward_count = 0, lateral_count = 0, yaw_count = 0;
         const int steps = std::lround(22.0 / m->opt.timestep);
         for (int step = 0; step < steps; ++step)
         {
@@ -104,9 +110,9 @@ int main()
                 for (int i = 0; i < 3; ++i) rl.obs.ang_vel[i] = d->sensordata[52+i];
                 const double t = d->time;
                 rl.obs.commands = t < 7 ? std::vector<float>{0, 0, 0}
-                    : t < 12 ? std::vector<float>{0.3f, 0, 0}
-                    : t < 17 ? std::vector<float>{0, 0.1f, 0}
-                    : std::vector<float>{0, 0, 0.2f};
+                    : t < 12 ? std::vector<float>{0.5f, 0, 0}
+                    : t < 17 ? std::vector<float>{0, 0.2f, 0}
+                    : std::vector<float>{0, 0, 0.6f};
                 if (t >= 2.0)
                 {
                     rl.obs.actions = rl.Forward();
@@ -130,9 +136,21 @@ int main()
             max_tilt = std::max(max_tilt, tilt);
             require(std::isfinite(height) && height > 0.18, "Robot fell during policy rollout at t=" + std::to_string(d->time));
             require(tilt < 1.0, "Robot tilted beyond the training termination threshold");
+            if (step % policy_stride == 0)
+            {
+                mjtNum velocity[6];
+                mj_objectVelocity(m.get(), d.get(), mjOBJ_XBODY, base, velocity, 1);
+                if (d->time >= 9 && d->time < 12) { forward_sum += velocity[3]; ++forward_count; }
+                if (d->time >= 14 && d->time < 17) { lateral_sum += velocity[4]; ++lateral_count; }
+                if (d->time >= 19) { yaw_sum += velocity[2]; ++yaw_count; }
+            }
         }
+        require(std::abs(forward_sum/forward_count - 0.5) < 0.15, "Forward velocity tracking failed");
+        require(std::abs(yaw_sum/yaw_count - 0.6) < 0.3, "Yaw velocity tracking failed");
         std::cout << "PASS: clipping, raw actions, legacy Go2W, LibTorch model and 22s MuJoCo rollout\n"
-                  << "Minimum base height: " << min_height << " m; maximum tilt: " << max_tilt << " rad\n";
+                  << "Minimum base height: " << min_height << " m; maximum tilt: " << max_tilt << " rad\n"
+                  << "Forward/lateral/yaw mean velocity: " << forward_sum/forward_count << " / "
+                  << lateral_sum/lateral_count << " / " << yaw_sum/yaw_count << "\n";
         return 0;
     }
     catch (const std::exception& e)

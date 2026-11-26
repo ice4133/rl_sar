@@ -14,6 +14,7 @@
 #include "inference_runtime.hpp"
 #include "loop.hpp"
 #include "fsm_all.hpp"
+#include "velocity_input.hpp"
 
 #include <csignal>
 #include <vector>
@@ -25,6 +26,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <memory>
+#include <deque>
 
 #include <mujoco/mujoco.h>
 #include "joystick.hh"
@@ -67,9 +69,18 @@ private:
     void RunModel();
     void RobotControl();
     void ResetSimulation();
+    void PhysicsControl();
+    bool WindowKey(int key, int action);
+    void UpdateVelocityCommand();
+    VelocityInput velocity_input;
+    std::deque<Input::Keyboard> window_keys;
+    bool physics_sync_control = false;
+    bool policy_step_due = false;
+    double next_control_time = 0.0;
+    long long control_tick = 0;
+    std::ofstream telemetry;
 
     // loop
-    std::shared_ptr<LoopFunc> loop_keyboard;
     std::shared_ptr<LoopFunc> loop_joystick;
     std::shared_ptr<LoopFunc> loop_control;
     std::shared_ptr<LoopFunc> loop_rl;
@@ -92,10 +103,8 @@ private:
 
     Button sys_js_button[20];
     int sys_js_axis[10] = {0};
-    bool sys_js_active = false;
     float axis_deadzone = 0.05f;
-    int sys_js_max_value = (1 << (16 - 1));
-    void SetupSysJoystick(const std::string& device, int bits);
+    void SetupSysJoystick(const std::string& device);
     void GetSysJoystick();
 
     // others

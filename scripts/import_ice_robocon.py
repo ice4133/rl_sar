@@ -111,11 +111,20 @@ def make_model(asset_root, urdf, destination, env, names, default_pos, efforts, 
     root.set("model", "ice_robocon")
     physics = env["sim"]["physics"]
     solver = physics["solver_cfg"]
+    shape = physics["default_shape_cfg"]
+    # Newton's nominal shape material is distinct from the terrain material.
+    # The saved run uses mu=1, ke=160000, kd=1100, not MuJoCo's default
+    # solref=(0.02, 1). Match the raw contact parameters observed in MJWarp.
+    if shape["ke"] <= 0 or shape["kd"] <= 0:
+        raise ValueError("Positive Newton contact stiffness and damping are required")
+    contact_solref = f"{2.0 / shape['kd']} {shape['kd'] / (2.0 * np.sqrt(shape['ke']))}"
     ET.SubElement(root, "option", {
         "timestep": str(env["sim"]["dt"] / physics["num_substeps"]),
         "integrator": solver["integrator"], "cone": solver["cone"],
         "impratio": str(solver["impratio"]), "iterations": str(solver["iterations"]),
         "tolerance": str(solver["tolerance"]),
+        "ls_iterations": str(solver["ls_iterations"]),
+        "gravity": " ".join(map(str, env["sim"]["gravity"])),
     })
     base = root.find(f".//body[@name='{env['base_link_name']}']")
     if base is None:
@@ -131,7 +140,8 @@ def make_model(asset_root, urdf, destination, env, names, default_pos, efforts, 
         if geom.get("contype", "1") != "0" or geom.get("conaffinity", "1") != "0":
             geom.set("contype", "2")
             geom.set("conaffinity", "1")
-            geom.set("friction", "0.6 0.005 0.0001")
+            geom.set("friction", f"{shape['mu']} 0.005 0.0001")
+            geom.set("solref", contact_solref)
             geom.set("condim", "3")
             geom.set("group", "3")
     actuator = ET.SubElement(root, "actuator")
@@ -166,7 +176,9 @@ def make_model(asset_root, urdf, destination, env, names, default_pos, efforts, 
     world = ET.SubElement(scene, "worldbody")
     ET.SubElement(world, "light", {"pos": "0 0 3", "dir": "0 0 -1", "directional": "true"})
     ET.SubElement(world, "geom", {"name": "floor", "type": "plane", "size": "0 0 0.1",
-                                  "contype": "1", "conaffinity": "2", "friction": "0.6 0.005 0.0001",
+                                  "contype": "1", "conaffinity": "2",
+                                  "friction": f"{env['scene']['terrain']['physics_material']['dynamic_friction']} 0.005 0.0001",
+                                  "solref": contact_solref,
                                   "material": "floor_material"})
     scene_path = mjcf_dir / "scene.xml"
     write_xml(scene, scene_path)
@@ -238,8 +250,13 @@ def main():
         pos_limits.append([0.0, 0.0] if i in wheels else limits)
         vel_limits.append(limits if i in wheels else [0.0, 0.0])
     identity = list(range(len(names)))
+    command_ranges = env["commands"]["base_velocity"]["ranges"]
+    command_axes = ("lin_vel_x", "lin_vel_y", "ang_vel_z")
     base = {"dt": env["sim"]["dt"], "decimation": env["decimation"], "num_of_dofs": len(names),
             "initial_keyframe": "home", "camera_track_body": env["base_link_name"],
+            "physics_sync_control": True,
+            "command_limits_lower": [float(command_ranges[axis][0]) for axis in command_axes],
+            "command_limits_upper": [float(command_ranges[axis][1]) for axis in command_axes],
             "fixed_kp": gains, "fixed_kd": damping,
             "torque_limits": efforts, "default_dof_pos": default_pos, "wheel_indices": wheels,
             "joint_names": names, "joint_controller_names": [name + "_controller" for name in names], "joint_mapping": identity}

@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -56,6 +57,11 @@ const int kErrorLength = 1024;          // load error string length
 // model and data
 mjModel* m = nullptr;
 mjData* d = nullptr;
+
+// Optional controller hook, called under sim.mtx once before each physics step.
+// Keeping this outside mjcb_control avoids running inference from mj_forward
+// while paused, rendering, or resetting the model.
+std::function<void()> beforePhysicsStep;
 
 using Seconds = std::chrono::duration<double>;
 
@@ -366,6 +372,7 @@ void PhysicsLoop(mj::Simulate& sim) {
             sim.speed_changed = false;
 
             // run single step, let next iteration deal with timing
+            if (beforePhysicsStep) beforePhysicsStep();
             mj_step(m, d);
             const char* message = Diverged(m->opt.disableflags, d);
             if (message) {
@@ -397,6 +404,7 @@ void PhysicsLoop(mj::Simulate& sim) {
               sim.InjectNoise();
 
               // call mj_step
+              if (beforePhysicsStep) beforePhysicsStep();
               mj_step(m, d);
               const char* message = Diverged(m->opt.disableflags, d);
               if (message) {

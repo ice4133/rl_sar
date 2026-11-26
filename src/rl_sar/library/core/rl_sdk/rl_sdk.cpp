@@ -24,27 +24,27 @@ void RL::StateController(const RobotState<float>* state, RobotCommand<float>* co
 
     this->motiontime++;
 
-    if (this->control.current_keyboard == Input::Keyboard::W)
+    if (!this->control.velocity_from_axes && this->control.current_keyboard == Input::Keyboard::W)
     {
         this->control.x += 0.1f;
     }
-    if (this->control.current_keyboard == Input::Keyboard::S)
+    if (!this->control.velocity_from_axes && this->control.current_keyboard == Input::Keyboard::S)
     {
         this->control.x -= 0.1f;
     }
-    if (this->control.current_keyboard == Input::Keyboard::A)
+    if (!this->control.velocity_from_axes && this->control.current_keyboard == Input::Keyboard::A)
     {
         this->control.y += 0.1f;
     }
-    if (this->control.current_keyboard == Input::Keyboard::D)
+    if (!this->control.velocity_from_axes && this->control.current_keyboard == Input::Keyboard::D)
     {
         this->control.y -= 0.1f;
     }
-    if (this->control.current_keyboard == Input::Keyboard::Q)
+    if (!this->control.velocity_from_axes && this->control.current_keyboard == Input::Keyboard::Q)
     {
         this->control.yaw += 0.1f;
     }
-    if (this->control.current_keyboard == Input::Keyboard::E)
+    if (!this->control.velocity_from_axes && this->control.current_keyboard == Input::Keyboard::E)
     {
         this->control.yaw -= 0.1f;
     }

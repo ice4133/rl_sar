@@ -10,4 +10,10 @@ if [[ ! -x "$SIMULATOR" ]]; then
 fi
 
 cd "$PROJECT_DIR"
-exec "$SIMULATOR" ice/robocon "${1:-scene}"
+SCENE="${1:-scene}"
+if (( $# > 0 )); then shift; fi
+echo "请点击 MuJoCo 窗口，在窗口内使用键盘（终端不接收运动按键）。"
+echo "手动启动：0 起立 → Enter 开始仿真 → 等待 2 秒 → 1 启用策略。"
+echo "按住 W/S 前后、A/D 横移、Q/E 转向：直接达到配置速度上限，松开归零。"
+echo "手柄摇杆推满达到同一速度上限；空格归零；Enter 暂停；R 复位。"
+exec "$SIMULATOR" ice/robocon "$SCENE" "$@"

@@ -209,31 +209,53 @@ ICE Robocon 使用品牌/型号名称 `ice/robocon`，本地模型、配置和�
 ```bash
 ./scripts/run_ice_robocon.sh
 # 等价命令：./cmake_build/bin/rl_sim_mujoco ice/robocon scene
+# 从 home 姿态直接加载最新导出的策略
+./scripts/run_ice_robocon.sh scene --auto-policy
 ```
 
-在启动程序的终端按 `0` 起立，完成后按 `1` 启用策略；`W/S` 调整前进速度，`A/D` 调整横移速度，`Q/E` 调整转向速度，空格将速度指令归零。`R` 恢复训练默认姿态，`Enter` 暂停/继续仿真。
+默认以暂停状态等待手动操作。**点击 MuJoCo 窗口，使其获得键盘焦点**，按 `0` 起立，再按 `Enter` 开始仿真，等待约两秒后按 `1` 启用策略。按住 `W/S` 前后、`A/D` 横移、`Q/E` 转向，立即给出该方向的最大速度指令；松开该方向的按键就归零，支持组合按键，相反方向同时按下相互抵消。按住空格将所有速度指令归零。切换到其他窗口会清除键盘运动指令；`R` 复位，`Enter` 暂停/继续。`--auto-policy` 仅跳过手动启用策略的步骤，速度仍由键盘/手柄控制。
+
+键盘和手柄摇杆共用 `policy/ice/robocon/base.yaml` 的 `command_limits_lower/upper`（依次为 vx、vy、wz）。当前范围来自保存的训练配置：前后 ±2.0 m/s、横移 ±0.3 m/s、转向 ±0.8 rad/s；按住 `W` 与左摇杆向前推到底都会给出 vx=2.0 m/s，摇杆半幅约为半速，回中归零。修改上下限并重启即可调整操作速度。这里的“最大速度”是给策略的目标指令，实际机身速度由策略和动力学决定。无相关配置的其他 MuJoCo 机器人默认各轴范围为 ±1。
 
 策略配置在 `policy/ice/robocon/base.yaml` 和 `policy/ice/robocon/robot_lab/config.yaml`；`source.yaml` 记录训练配置来源和 checkpoint 哈希。模型资源位于 `src/rl_sar_zoo/ice/robocon_description/`，其中包含原始 URDF、网格和部署用 MJCF。该资源目录属于单独下载的 `rl_sar_zoo` 仓库，不由本仓库跟踪。
 
 更新 Robocon 的训练结果时，使用保存的 `params/env.yaml`、`params/agent.yaml` 和 checkpoint 重新导入。脚本复用 `scripts/convert_urdf.py`（来自本地 `unitree_rl_mjlab`），并补齐浮动基座、执行器、传感器、初始姿态和场景；输入 URDF 和训练结果保持原样。
 
 ```bash
-# 使用独立环境，版本与 C++ 部署运行库一致；只需准备一次
-python3 -m venv --system-site-packages .venv-deploy
-.venv-deploy/bin/python -m pip install 'torch==2.3.0+cpu' --index-url https://download.pytorch.org/whl/cpu
-.venv-deploy/bin/python -m pip install 'numpy<2' 'mujoco==3.2.7' PyYAML
+# Ubuntu 本地独立环境：MuJoCo 3.2.7 / CPU PyTorch 2.3.0 / NumPy 1.26.4
+# 依赖解压到 library/，无需 sudo；不修改 robot_lab 的训练环境。
+bash scripts/setup_ice_robocon.sh
 
 .venv-deploy/bin/python scripts/import_ice_robocon.py \
-  --run-dir /home/ice/robot_lab/logs \
-  --asset-root /home/ice/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon \
+  --run-dir /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_flat/2026-11-24_23-11-40 \
+  --asset-root /home/jasper/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon \
   --checkpoint model_4999.pt --force
 
-INFERENCE_RUNTIME=libtorch ./build.sh -mj
-cmake --build cmake_build --target test_ice_robocon -j2
 ./cmake_build/bin/test_ice_robocon
+
+# 固定仿真步长回放：站立、前进 0.5、横移 0.2、转向 0.6，共 22 秒
+.venv-deploy/bin/python scripts/eval_ice_robocon.py --video
+# 原 robot_lab / Newton 环境运行同一策略、同一段指令，关闭随机化和观测噪声
+/home/jasper/robot_lab/.venv/bin/python scripts/compare_ice_robocon_robot_lab.py
 ```
 
 导入脚本仅支持当前 Robocon 的无历史帧、无观测归一化 ELU MLP 策略。它按保存的训练配置展开关节参数和左右轮速度符号，并在动作缩放后裁剪目标；原始动作仍用于下一帧观测。改变策略结构或观测定义时，需要同步适配导入和部署代码。
+
+Robocon 默认启用 `physics_sync_control`：物理步长 0.0025 s，每两个物理步更新一次 PD，每四次 PD 更新运行一次策略。运行中由物理线程读取一致状态并立即消费动作，暂停时仍处理窗口输入；调整 MuJoCo 播放速度不会改变控制的仿真周期。其他机器人保留原来的线程调度。
+
+XML 从训练配置读取 Newton 的接触材料参数。此训练记录的机器人摩擦系数为 1.0，地面为 0.6，实际接触取 1.0；`ke=160000`、`kd=1100` 对应 `solref="0.00181818 1.375"`。原脚本将机器人摩擦写为 0.6，并使用默认 `solref="0.02 1"`，会改变轮地滑移和支撑。原训练使用 Newton 碰撞检测，部署使用 MuJoCo 碰撞检测；参数对齐后，横移等动作仍可能存在差异。
+
+回放的 CSV、数值报告和视频位于 `logs/robocon_diagnostics/latest/`。原生界面可额外记录机体坐标系速度、姿态和指令：
+
+```bash
+mkdir -p logs/robocon_diagnostics
+RL_SAR_TELEMETRY=logs/robocon_diagnostics/interactive.csv \
+  ./scripts/run_ice_robocon.sh scene --auto-policy
+```
+
+本地 `unitree_rl_mjlab` 的 Bodydemo03 部署模板使用另一套策略约定（含 gait phase、不同关节顺序和 400/12 的腿部 PD）。本任务的 robot_lab 策略是 57 维观测、16 维动作、60/2 的腿部 PD，不能直接套用该模板；这里只复用其 URDF 转换思路。
+
+低速测试还需注意训练命令生成器：`UniformThresholdVelocityCommand._resample_command` 会将平移指令模长不超过 0.2 m/s 的指令清零，策略很少接触这些非零小指令。手柄小幅输入仍可能进入这个区间。原训练环境直接输入 vy=0.1 的对照也几乎没有横移，不能仅凭低速不响应判断模型移植失败。支持这一低速范围需要调整训练命令分布及相应奖励后验证。
 
 #### Docker
 
@@ -286,6 +308,8 @@ ros2 run web_video_server web_video_server
 访问 [http://robot.robotsfan.com/](http://robot.robotsfan.com/)， 填写IP地址和端口，检查右上角的设置界面，然后连接机器人。进入控制页面后，将屏幕水平放置，点击左上角的全屏按钮，即可使用手机浏览器控制机器人！
 
 ### 使用手柄或键盘控制
+
+MuJoCo 使用窗口内的按住/松开控制，速度上限见上面的 Robocon 说明。下面的方向键增减描述适用于原有 Gazebo/真机终端控制。
 
 |手柄控制|键盘控制|功能描述|
 |---|---|---|
