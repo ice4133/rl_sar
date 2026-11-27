@@ -6,6 +6,8 @@
 #include "rl_sim_mujoco.hpp"
 #include "robot_glfw_adapter.hpp"
 #include "mujoco_joint_drive.hpp"
+#include "tuning.hpp"
+#include "transport.hpp"
 
 RL_Sim* RL_Sim::instance = nullptr;
 
@@ -16,7 +18,7 @@ RL_Sim::RL_Sim(int argc, char **argv)
 
     if (argc < 3)
     {
-        std::cout << LOGGER::ERROR << "Usage: " << argv[0] << " robot_name scene_name" << std::endl;
+        std::cout << LOGGER::ERROR << "Usage: " << argv[0] << " robot_name scene_name [--auto-policy] [--tuner-port PORT]" << std::endl;
         throw std::runtime_error("Invalid arguments");
     }
     else
@@ -24,6 +26,28 @@ RL_Sim::RL_Sim(int argc, char **argv)
         this->robot_name = argv[1];
         this->scene_name = argv[2];
     }
+
+    bool auto_policy = false;
+    int tuner_port = 0;
+    for (int i = 3; i < argc; ++i)
+    {
+        const std::string argument = argv[i];
+        if (argument == "--auto-policy") auto_policy = true;
+        else if (argument == "--tuner-port")
+        {
+            if (++i >= argc) throw std::runtime_error("--tuner-port requires a port number");
+            const std::string value = argv[i];
+            size_t consumed = 0;
+            tuner_port = std::stoi(value, &consumed);
+            if (consumed != value.size() || tuner_port < 1 || tuner_port > 65535)
+                throw std::runtime_error("--tuner-port must be 1..65535");
+        }
+        else throw std::runtime_error("Unknown simulator argument: " + argument);
+    }
+    // Tuning sessions start directly in the policy, like --auto-policy.
+    if (tuner_port) auto_policy = true;
+    // Bind before starting physics, so invalid/busy ports cannot unwind a live thread.
+    if (tuner_port) tuner_transport = std::make_unique<sim_tuner::Transport>(tuner_port);
 
     this->ang_vel_axis = "body";
 
@@ -136,15 +160,10 @@ RL_Sim::RL_Sim(int argc, char **argv)
         if (!telemetry) throw std::runtime_error("Cannot open telemetry CSV: " + std::string(path));
         telemetry << "time,policy_step,cmd_vx,cmd_vy,cmd_wz,vx,vy,wz,height,tilt\n";
     }
-    bool auto_policy = false;
-    for (int i = 3; i < argc; ++i)
+    if (auto_policy)
     {
-        if (std::string(argv[i]) == "--auto-policy")
-        {
-            auto_policy = true;
-            this->fsm.RequestStateChange("RLFSMStateRLLocomotion");
-        }
-        else throw std::runtime_error("Unknown simulator argument: " + std::string(argv[i]));
+        this->fsm.RequestStateChange("RLFSMStateRLLocomotion");
+        std::cout << LOGGER::NOTE << "Automatic policy start: no get-up/start keys required." << std::endl;
     }
     if (this->robot_name == "ice/robocon" && !auto_policy)
     {
@@ -163,13 +182,32 @@ RL_Sim::RL_Sim(int argc, char **argv)
         if (std::abs(stride - std::round(stride)) > 1e-5 || stride < 1.0)
             throw std::runtime_error("Control dt must be an integer multiple of the MuJoCo timestep");
         const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
-        beforePhysicsStep = [this]() { this->PhysicsControl(); };
         std::cout << LOGGER::INFO << "Control and policy synchronized to MuJoCo simulation time" << std::endl;
+    }
+
+    if (tuner_port)
+    {
+        const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        tuner = std::make_unique<sim_tuner::Tuning>(mj_model, mj_data,
+            params.Get<std::vector<int>>("joint_mapping"), params.Get<std::vector<std::string>>("joint_names"),
+            robot_name, drive_mode, params.Get<std::string>("camera_track_body"));
+        std::cout << LOGGER::INFO << "[Tuner] Listening on 127.0.0.1:" << tuner_port << std::endl;
+    }
+    if (physics_sync_control || tuner)
+    {
+        const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        beforePhysicsStep = [this]() {
+            // Handle a viewer rewind before collecting new control commands.
+            if (tuner) { tuner->Tick(); PumpTuner(); }
+            if (physics_sync_control) PhysicsControl();
+            if (tuner) tuner->Tick();
+        };
     }
 
     // loop
     this->loop_control = std::make_shared<LoopFunc>("loop_control", this->params.Get<float>("dt"), [this]() {
         const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
+        if (tuner && !sim->run) PumpTuner();
         // While paused, still process keyboard/FSM input so Enter can resume.
         if (!this->physics_sync_control || !sim->run) this->RobotControl();
     }, -1, true);
@@ -220,6 +258,8 @@ RL_Sim::~RL_Sim()
     this->loop_plot->shutdown();
 #endif
     if (physics_thread.joinable()) physics_thread.join();
+    tuner_transport.reset();
+    tuner.reset();
     // Release the viewer/GL driver before process-wide inference-library
     // destructors run. GLFW's registered atexit cleanup is then a no-op.
     sim.reset();
@@ -251,6 +291,7 @@ void RL_Sim::GetState(RobotState<float> *state)
             state->motor_state.dq[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + this->params.Get<int>("num_of_dofs")];
             state->motor_state.tau_est[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + 2 * this->params.Get<int>("num_of_dofs")];
         }
+        if (tuner) tuner->Perturb(state->motor_state.q, state->motor_state.dq, state->imu.gyroscope);
     }
 }
 
@@ -258,6 +299,20 @@ void RL_Sim::SetCommand(const RobotCommand<float> *command)
 {
     if (mj_data)
     {
+        if (tuner)
+        {
+            const auto& motor = command->motor_command;
+            sim_tuner::Command delayed;
+            delayed.q.assign(motor.q.begin(), motor.q.end());
+            delayed.dq.assign(motor.dq.begin(), motor.dq.end());
+            delayed.kp.assign(motor.kp.begin(), motor.kp.end());
+            delayed.kd.assign(motor.kd.begin(), motor.kd.end());
+            delayed.tau.assign(motor.tau.begin(), motor.tau.end());
+            const auto efforts = params.Get<std::vector<float>>("torque_limits");
+            delayed.limits.assign(efforts.begin(), efforts.end());
+            tuner->Submit(std::move(delayed));
+            return;
+        }
         const bool implicit = UseImplicitMujocoDrive(params.Get<std::string>("mujoco_joint_drive", "explicit"));
         const auto mapping = params.Get<std::vector<int>>("joint_mapping");
         const auto efforts = params.Get<std::vector<float>>("torque_limits");
@@ -289,6 +344,17 @@ void RL_Sim::ResetSimulation()
     mj_forward(this->mj_model, this->mj_data);
     this->next_control_time = 0.0;
     this->control_tick = 0;
+    if (tuner) tuner->Reset();
+}
+
+void RL_Sim::PumpTuner()
+{
+    if (!tuner_transport) return;
+    if (mj_model != m || mj_data != d)
+        throw std::runtime_error("Restart the tuner after loading a different MuJoCo model");
+    for (auto& request : tuner_transport->TakeRequests())
+        tuner_transport->Reply({request.connection, tuner->Handle(request.text, sim->run != 0,
+            [this]() { ResetSimulation(); })});
 }
 
 void RL_Sim::PhysicsControl()
@@ -427,6 +493,15 @@ void RL_Sim::SetupSysJoystick(const std::string& device)
         std::cout << LOGGER::ERROR << "Joystick [" << device << "] open failed." << std::endl;
         // exit(1);
     }
+    else
+    {
+        sys_js_mapping = JoystickMapping(sys_js->axisCodes(), sys_js->buttonCodes());
+        std::cout << LOGGER::INFO << "Joystick [" << device << "]: " << sys_js->name()
+                  << "; LX=" << sys_js_mapping.axes[0] << ", LY=" << sys_js_mapping.axes[1]
+                  << ", RX=" << sys_js_mapping.axes[3]
+                  << "; LB=" << sys_js_mapping.buttons[4] << ", RB=" << sys_js_mapping.buttons[5]
+                  << std::endl;
+    }
 
 }
 
@@ -449,13 +524,15 @@ void RL_Sim::GetSysJoystick()
 
     while (this->sys_js->sample(&this->sys_js_event))
     {
-        if (this->sys_js_event.isButton() && this->sys_js_event.number < 20)
+        if (this->sys_js_event.isButton())
         {
-            this->sys_js_button[this->sys_js_event.number].update(this->sys_js_event.value);
+            const int logical = sys_js_mapping.Button(sys_js_event.number);
+            if (logical >= 0) this->sys_js_button[logical].update(this->sys_js_event.value);
         }
-        else if (this->sys_js_event.isAxis() && this->sys_js_event.number < 10)
+        else if (this->sys_js_event.isAxis())
         {
-            this->sys_js_axis[this->sys_js_event.number] = this->sys_js_event.value;
+            const int logical = sys_js_mapping.Axis(sys_js_event.number);
+            if (logical >= 0) this->sys_js_axis[logical] = this->sys_js_event.value;
         }
     }
 
@@ -469,8 +546,8 @@ void RL_Sim::GetSysJoystick()
     if (this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RStick);
     if (this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::DPadUp);
     if (this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::DPadDown);
-    if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
-    if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
+    if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
+    if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
     if (this->sys_js_button[4].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
     if (this->sys_js_button[4].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
     if (this->sys_js_button[4].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::LB_X);

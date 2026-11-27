@@ -30,10 +30,13 @@
 
 #include <mujoco/mujoco.h>
 #include "joystick.hh"
+#include "joystick_mapping.hpp"
 #include "mujoco_utils.hpp"
 
 #include "matplotlibcpp.h"
 namespace plt = matplotlibcpp;
+
+namespace sim_tuner { class Tuning; class Transport; }
 
 class Button
 {
@@ -70,6 +73,7 @@ private:
     void RobotControl();
     void ResetSimulation();
     void PhysicsControl();
+    void PumpTuner();
     bool WindowKey(int key, int action);
     void UpdateVelocityCommand();
     VelocityInput velocity_input;
@@ -79,6 +83,8 @@ private:
     double next_control_time = 0.0;
     long long control_tick = 0;
     std::ofstream telemetry;
+    std::unique_ptr<sim_tuner::Tuning> tuner;
+    std::unique_ptr<sim_tuner::Transport> tuner_transport;
 
     // loop
     std::shared_ptr<LoopFunc> loop_joystick;
@@ -100,6 +106,7 @@ private:
 
     // joystick
     std::unique_ptr<Joystick> sys_js;
+    JoystickMapping sys_js_mapping;
     JoystickEvent sys_js_event;
 
     Button sys_js_button[20];

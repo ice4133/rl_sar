@@ -691,7 +691,23 @@ if(USE_MUJOCO)
     endif()
 
     # Build executable
+    set(SIM_TUNER_DIR library/thirdparty/sim_tuner)
+    add_library(sim_tuner_runtime STATIC ${SIM_TUNER_DIR}/tuning.cpp ${SIM_TUNER_DIR}/transport.cpp)
+    target_include_directories(sim_tuner_runtime PUBLIC ${SIM_TUNER_DIR})
+    target_link_libraries(sim_tuner_runtime PUBLIC ${YAML_CPP_LIBRARIES} Threads::Threads mujoco_prebuilt)
+    add_executable(test_sim_tuner EXCLUDE_FROM_ALL ${SIM_TUNER_DIR}/test_tuning.cpp)
+    target_link_libraries(test_sim_tuner PRIVATE sim_tuner_runtime)
     add_executable(rl_sim_mujoco src/rl_sim_mujoco.cpp ${MUJOCO_SIMULATE_SRC} ${JOYSTICK_SRC})
+
+    option(BUILD_SIM_TUNER_PANEL "Build the Qt5 desktop tuning panel when Qt is available" ON)
+    if(BUILD_SIM_TUNER_PANEL)
+        find_package(Qt5 5.15 QUIET COMPONENTS Widgets Network)
+        if(Qt5_FOUND)
+            add_subdirectory(${SIM_TUNER_DIR})
+        else()
+            message(STATUS "Qt5 Widgets/Network not found; skipping sim_tuner_panel (simulator tuning API remains available)")
+        endif()
+    endif()
 
     # Suppress deprecation warnings for macOS 15.0 API changes in MuJoCo Simulate
     if(SYSTEM_TYPE STREQUAL "Darwin")
@@ -709,7 +725,7 @@ if(USE_MUJOCO)
 
     target_link_libraries(rl_sim_mujoco
         rl_sdk observation_buffer ${YAML_CPP_LIBRARIES}
-        Threads::Threads mujoco_prebuilt glfw
+        Threads::Threads mujoco_prebuilt glfw sim_tuner_runtime
     )
 
     add_executable(test_ice_robocon EXCLUDE_FROM_ALL test/test_ice_robocon.cpp)
@@ -717,6 +733,7 @@ if(USE_MUJOCO)
         rl_sdk observation_buffer ${YAML_CPP_LIBRARIES} mujoco_prebuilt
     )
     add_executable(test_velocity_input EXCLUDE_FROM_ALL test/test_velocity_input.cpp)
+    add_executable(test_joystick_mapping EXCLUDE_FROM_ALL test/test_joystick_mapping.cpp ${JOYSTICK_SRC})
     add_executable(test_mujoco_joint_drive EXCLUDE_FROM_ALL test/test_mujoco_joint_drive.cpp)
     target_link_libraries(test_mujoco_joint_drive mujoco_prebuilt)
     add_executable(test_ice_fsm EXCLUDE_FROM_ALL test/test_ice_fsm.cpp)

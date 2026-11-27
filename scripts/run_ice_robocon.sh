@@ -19,7 +19,18 @@ if [[ ! -f "$MODEL" ]]; then
     exit 1
 fi
 echo "请点击 MuJoCo 窗口，在窗口内使用键盘（终端不接收运动按键）。"
-echo "手动启动：0 起立 → Enter 开始仿真 → 等待 2 秒 → 1 启用策略。"
+AUTO_POLICY=false
+for argument in "$@"; do
+    case "$argument" in
+        --auto-policy|--tuner-port) AUTO_POLICY=true ;;
+    esac
+done
+if [[ "$AUTO_POLICY" == true ]]; then
+    echo "自动启动策略：无需按起立、开始或切换策略按键。"
+else
+    echo "手动启动：0 起立 → Enter 开始仿真 → 等待 2 秒 → 1 启用策略。"
+    echo "追加 --auto-policy 可自动启动；--tuner-port <端口> 同样自动启动。"
+fi
 echo "按住 W/S 前后、A/D 横移、Q/E 转向：以配置上限为目标平滑加速，松开平滑减速。"
 echo "0/9 先减速再切换站姿/趴下；1 取消普通停车请求；P 直接进入阻尼。"
 echo "手柄摇杆推满使用同一目标上限；空格平滑停车；Enter 暂停；R 复位。"

@@ -207,6 +207,8 @@ git clone https://github.com/osrf/gazebo_models.git ~/.gazebo/models
 
 #### Mujoco
 
+实时调整摩擦、等效指令延迟、电机参数、观测噪声、质量和重心，可使用新增的 [C++ / Qt 统一调参面板](src/rl_sar/library/thirdparty/sim_tuner/README.md)。编译 `sim_tuner_panel` 后，给仿真追加 `--tuner-port 9870`，另一个终端运行 `./cmake_build/bin/sim_tuner_panel --connect`。`--tuner-port` 同时自动启用策略并开始仿真，无需按起立或启动按键。面板代码与接口实现在 `src/rl_sar/library/thirdparty/sim_tuner/`。
+
 ```bash
 ./cmake_build/bin/rl_sim_mujoco <ROBOT> <SCENE>
 # Example: ./cmake_build/bin/rl_sim_mujoco g1 scene_29dof
@@ -226,6 +228,8 @@ ICE Robocon 使用品牌/型号名称 `ice/robocon`。配置和导出的策略�
 键盘和手柄摇杆共用 `policy/ice/robocon/base.yaml` 的 `command_limits_lower/upper`（依次为 vx、vy、wz）。当前范围来自保存的第一阶段协调训练配置：前后 ±1.5 m/s、横移 ±0.3 m/s、转向 ±0.8 rad/s；按住 `W` 与左摇杆向前推到底都会以 vx=1.5 m/s 为目标，摇杆半幅约为半速，回中后平滑减速。此阶段尚未扩速到最终的 ±2.5 m/s。`command_acceleration_limits` 和 `command_deceleration_limits` 分别控制三个方向的指令加速和减速，单位为 m/s²、m/s²、rad/s²；换向时先减到零，再反向加速。`getup_duration/getdown_duration` 控制起立和趴下时长，`policy_transition_duration` 控制策略接管时长，`stop_settle_duration` 控制普通退出前的稳定等待时间。修改后重启生效。这里限制的是给策略的指令，实际机身速度和停车距离仍由策略及动力学决定。其他机器人的 FSM 和输入处理保持原有行为。
 
 策略配置在 `policy/ice/robocon/base.yaml` 和 `policy/ice/robocon/robot_lab/config.yaml`；`source.yaml` 记录训练配置来源和 checkpoint 哈希。模型资源位于 `src/rl_sar_zoo/ice/robocon_description/`，其中包含原始 URDF、网格和部署用 MJCF。该资源目录属于单独下载的 `rl_sar_zoo` 仓库，不由本仓库跟踪。
+
+手柄操作：`A` 起立，`RB+X` 暂停/继续，起立完成后 `RB+方向键上` 启用策略；左摇杆控制前后和横移，右摇杆左右控制转向。起立状态只维持姿态，摇杆运动指令需要在策略状态下使用。MuJoCo 适配器从 Linux joydev 读取实际轴/按键映射，兼容 Xbox USB 与蓝牙编号差异；启动日志显示手柄名称及 LX/LY/RX、LB/RB 的实际编号，便于排查映射。
 
 Robocon 当前使用 `mujoco_joint_drive: implicit`，对应训练中的隐式执行器：物理积分器在每个物理步计算 PD 反馈，并对反馈与前馈合力限幅。`explicit` 保留原先按控制周期计算力矩的方式，其他机器人缺省仍使用该方式。导入脚本根据保存的执行器类型生成此项；Python 回放默认读取此项，使用 `--drive explicit` 或 `--drive implicit` 可做对照。驱动反馈形式对齐不表示 Newton 和原生 MuJoCo 的所有动力学差异已经消除。
 
