@@ -235,7 +235,19 @@ Robocon 当前使用 `mujoco_joint_drive: implicit`，对应训练中的隐式�
 
 更新 Robocon 的训练结果时，使用保存的 `params/env.yaml`、`params/agent.yaml` 和 checkpoint 重新导入。脚本复用 `scripts/convert_urdf.py`（来自本地 `unitree_rl_mjlab`），并补齐浮动基座、执行器、传感器、初始姿态和场景；输入 URDF 和训练结果保持原样。
 
-当前部署为 `ice_robocon_smooth_from4999/2026-11-27_20-15-53_target_smooth_airspin_s42/model_7998.pt`，从原始4999微调，20项奖励含原有横移腾空项及新增目标平滑、悬空轮超速约束。原生策略及FSM测试通过；目前跟踪最完整，但横移/混合目标变化和步态风格尚未全面达标。重新导入会保留已有的部署加减速度和状态过渡时长；策略参数仍从该次训练记录生成。
+一键替换为最新训练策略：
+
+```bash
+./scripts/import_latest_ice_robocon.sh
+# 只查看自动选择的训练目录与 checkpoint
+./scripts/import_latest_ice_robocon.sh --dry-run
+# 或指定某次训练目录，自动取其中最大编号 checkpoint
+./scripts/import_latest_ice_robocon.sh --run-dir /path/to/training/run
+```
+
+自动模式扫描同级 `robot_lab/logs/rsl_rl`，按 checkpoint 修改时间选择最新的 Robocon run，再取该 run 内最大编号的 `model_N.pt`，排除名称含 `smoke` 的测试目录。可用 `--robot-lab`、`--logs-root`、`--asset-root` 覆盖路径；指定 `--run-dir` 后还可用 `--checkpoint model_N.pt` 选择具体模型。旧策略、配置和整个模型目录备份到 `logs/robocon_policy_backups/`；导入失败自动恢复，日志保留在备份目录。成功后重启仿真即可，脚本不会自动启动仿真。
+
+当前部署为 `ice_robocon_smooth_straight_from7998/2026-11-27_21-55-24_straight_s42/model_9997.pt`，从Smooth7998继续微调，21项奖励含新增直行约束。左前轮腿异常显著改善，基础策略及FSM测试通过；累计直行路径验收仍未通过。重新导入会保留已有的部署加减速度和状态过渡时长；策略参数仍从该次训练记录生成。
 
 ```bash
 # Ubuntu 本地独立环境：MuJoCo 3.2.7 / CPU PyTorch 2.3.0 / NumPy 1.26.4
@@ -243,9 +255,9 @@ Robocon 当前使用 `mujoco_joint_drive: implicit`，对应训练中的隐式�
 bash scripts/setup_ice_robocon.sh
 
 .venv-deploy/bin/python scripts/import_ice_robocon.py \
-  --run-dir /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_from4999/2026-11-27_20-15-53_target_smooth_airspin_s42 \
+  --run-dir /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_straight_from7998/2026-11-27_21-55-24_straight_s42 \
   --asset-root /home/jasper/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon \
-  --checkpoint model_7998.pt --force
+  --checkpoint model_9997.pt --force
 
 ./cmake_build/bin/test_ice_robocon
 
@@ -270,7 +282,9 @@ cmake --build cmake_build --target test_ice_fsm -j2
 /home/jasper/robot_lab/.venv/bin/python scripts/compare_ice_robocon_robot_lab.py
 ```
 
-当前 Smooth `model_7998` 的记录在 `logs/robocon_diagnostics/smooth_from4999_7998/report.txt`。28组实际C++定点仿真均未触发保护，原生策略与完整FSM验收通过。前后±2实测+1.947/-1.929，横移±0.2实测+0.190/-0.204，转向±0.6实测+0.581/-0.589；混合(0.5,0.2,0.4)约为(0.472,0.181,0.403)。相比原始4999，横移及混合跟踪改善，但低速仍欠跟踪，部分轮速目标变化和离地事件增加，不能宣称所有动作均丝滑。倒退时接触力可能短暂卸载，按原生姿态重算轮底几何末6秒最大离地仅0.58mm，主要仍为滚动。`native_video/`有实际C++姿态回放；`backup/`保存原始4999。
+当前 Straight `model_9997` 的记录在 `logs/robocon_diagnostics/smooth_straight_9997/report.txt`。28组C++原生仿真无保护中止，基础策略和完整FSM测试通过。倒退时左前腿速度RMS从0.201降到0.00124rad/s，左前轮等效滚动速度与机身接近。但14秒约25m前进的末端偏航仍0.46°、横向偏移0.30m，倒退仍3.17°、0.73m；按最大2°/0.10m标准，7组直行路径检查均未通过。混合指令偏航和反向横移略退化。当前策略不能宣称“行进不歪”；前一版7998备份于该目录的`backup/`。
+
+此前 Smooth `model_7998` 的记录在 `logs/robocon_diagnostics/smooth_from4999_7998/report.txt`。28组实际C++定点仿真均未触发保护，原生策略与完整FSM验收通过。前后±2实测+1.947/-1.929，横移±0.2实测+0.190/-0.204，转向±0.6实测+0.581/-0.589；混合(0.5,0.2,0.4)约为(0.472,0.181,0.403)。相比原始4999，横移及混合跟踪改善，但低速仍欠跟踪，部分轮速目标变化和离地事件增加，不能宣称所有动作均丝滑。倒退时接触力可能短暂卸载，按原生姿态重算轮底几何末6秒最大离地仅0.58mm，主要仍为滚动。`native_video/`有实际C++姿态回放；`backup/`保存原始4999。
 
 旧 native_coordination_v2 `model_7999` 的评估记录在 `logs/robocon_diagnostics/native_coordination_v2_7999/report.txt`。实际 C++ rl_sar/LibTorch/FSM 跑了26组固定指令，正横移0.3触发倾斜限制、负横移-0.3触发高度限制；其余工况完成运行不代表跟踪合格。前后±1.5实测约+1.449/-1.450，横移±0.2几乎为零，转向±0.6约+0.305/-0.059；混合指令横移和转向分量失效，并有低趴、悬空轮接近30rad/s空转现象。完整启停FSM测试通过，但横移跟踪测试失败。该版比v1明显退化，不宜扩速。`native_grid/`保存C++日志与CSV，`native_video/`保存其姿态轨迹回放，`backup/`保存v1策略和模型。辅助Python回放与原生FSM启动流程不同，其失败计数单独记录。
 

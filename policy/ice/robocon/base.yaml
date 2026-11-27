@@ -9,13 +9,6 @@ ice/robocon:
   mujoco_joint_drive: implicit
   command_limits_lower: [-2.0, -0.3, -0.8]
   command_limits_upper: [2.0, 0.3, 0.8]
-  # Deployment transitions; vx/vy acceleration in m/s^2, yaw in rad/s^2.
-  command_acceleration_limits: [1.0, 0.3, 0.8]
-  command_deceleration_limits: [1.5, 0.5, 1.2]
-  getup_duration: 2.0
-  getdown_duration: 2.0
-  policy_transition_duration: 0.5
-  stop_settle_duration: 0.3
   fixed_kp: [60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 0.0, 0.0, 0.0, 0.0]
   fixed_kd: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 0.5, 0.5, 0.5, 0.5]
   torque_limits: [31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 31.7, 23.7, 23.7,
@@ -31,3 +24,9 @@ ice/robocon:
     rl_calf_joint_controller, fr_foot_joint_controller, fl_foot_joint_controller, rr_foot_joint_controller,
     rl_foot_joint_controller]
   joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  command_acceleration_limits: [1.0, 0.3, 0.8]
+  command_deceleration_limits: [1.5, 0.5, 1.2]
+  getup_duration: 2.0
+  getdown_duration: 2.0
+  policy_transition_duration: 0.5
+  stop_settle_duration: 0.3

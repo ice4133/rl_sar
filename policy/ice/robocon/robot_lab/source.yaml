@@ -1,9 +1,9 @@
-task: RobotLab-Isaac-Velocity-Flat-ICE-Robocon-Smooth-v0
-checkpoint: /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_from4999/2026-11-27_20-15-53_target_smooth_airspin_s42/model_7998.pt
-checkpoint_sha256: 206de5e14063d8078384cea8526d5948a781c04836dbf55142f17fc1ee0fac40
-iteration: 7998
-source_env: /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_from4999/2026-11-27_20-15-53_target_smooth_airspin_s42/params/env.yaml
-source_agent: /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_from4999/2026-11-27_20-15-53_target_smooth_airspin_s42/params/agent.yaml
+task: RobotLab-Isaac-Velocity-Flat-ICE-Robocon-Smooth-Straight-v0
+checkpoint: /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_straight_from7998/2026-11-27_21-55-24_straight_s42/model_9997.pt
+checkpoint_sha256: 648d390623c0a12f1c4cc9c7b768f280e4b5b53b175d36c252b7ae4c17337dc3
+iteration: 9997
+source_env: /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_straight_from7998/2026-11-27_21-55-24_straight_s42/params/env.yaml
+source_agent: /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_straight_from7998/2026-11-27_21-55-24_straight_s42/params/agent.yaml
 source_urdf: /home/jasper/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon/urdf/robocon.urdf
 torch_version: 2.3.0+cpu
 mujoco_version: 3.2.7
