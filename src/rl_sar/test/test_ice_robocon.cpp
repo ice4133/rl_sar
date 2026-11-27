@@ -5,6 +5,7 @@
 
 // Exercise the deployed LibTorch policy and RL SDK against MuJoCo without a GUI.
 #include "rl_sdk.hpp"
+#include "mujoco_joint_drive.hpp"
 #include <mujoco/mujoco.h>
 #include <cmath>
 #include <filesystem>
@@ -93,6 +94,8 @@ int main()
         vel.assign(16, 0.0f);
         const int control_stride = std::lround(rl.params.Get<float>("dt") / m->opt.timestep);
         const int policy_stride = control_stride * rl.params.Get<int>("decimation");
+        const bool implicit = UseImplicitMujocoDrive(rl.params.Get<std::string>("mujoco_joint_drive", "explicit"));
+        const auto efforts = rl.params.Get<std::vector<float>>("torque_limits");
         double min_height = 10.0, max_tilt = 0.0;
         double forward_sum = 0.0, lateral_sum = 0.0, yaw_sum = 0.0;
         int forward_count = 0, lateral_count = 0, yaw_count = 0;
@@ -125,8 +128,8 @@ int main()
             {
                 for (int i = 0; i < 16; ++i)
                 {
-                    d->ctrl[i] = kp[i] * (pos[i] - d->sensordata[i])
-                               + kd[i] * (vel[i] - d->sensordata[16+i]);
+                    SetMujocoJointDrive(m.get(), d.get(), i, d->sensordata[i], d->sensordata[16+i],
+                        pos[i], vel[i], kp[i], kd[i], 0.0, efforts[i], implicit);
                 }
             }
             mj_step(m.get(), d.get());
@@ -146,6 +149,7 @@ int main()
             }
         }
         require(std::abs(forward_sum/forward_count - 0.5) < 0.15, "Forward velocity tracking failed");
+        require(std::abs(lateral_sum/lateral_count - 0.2) < 0.05, "Lateral velocity tracking failed");
         require(std::abs(yaw_sum/yaw_count - 0.6) < 0.3, "Yaw velocity tracking failed");
         std::cout << "PASS: clipping, raw actions, legacy Go2W, LibTorch model and 22s MuJoCo rollout\n"
                   << "Minimum base height: " << min_height << " m; maximum tilt: " << max_tilt << " rad\n"

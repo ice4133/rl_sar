@@ -6,6 +6,7 @@ ice/robocon:
   initial_keyframe: home
   camera_track_body: base_link
   physics_sync_control: true
+  mujoco_joint_drive: implicit
   command_limits_lower: [-2.0, -0.3, -0.8]
   command_limits_upper: [2.0, 0.3, 0.8]
   # Deployment transitions; vx/vy acceleration in m/s^2, yaw in rad/s^2.

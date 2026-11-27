@@ -717,6 +717,8 @@ if(USE_MUJOCO)
         rl_sdk observation_buffer ${YAML_CPP_LIBRARIES} mujoco_prebuilt
     )
     add_executable(test_velocity_input EXCLUDE_FROM_ALL test/test_velocity_input.cpp)
+    add_executable(test_mujoco_joint_drive EXCLUDE_FROM_ALL test/test_mujoco_joint_drive.cpp)
+    target_link_libraries(test_mujoco_joint_drive mujoco_prebuilt)
     add_executable(test_ice_fsm EXCLUDE_FROM_ALL test/test_ice_fsm.cpp)
     target_link_libraries(test_ice_fsm
         rl_sdk observation_buffer ${YAML_CPP_LIBRARIES} mujoco_prebuilt

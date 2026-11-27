@@ -25,6 +25,8 @@ def main():
         "--output", type=Path, default=project / "logs/robocon_diagnostics/robot_lab"
     )
     parser.add_argument("--low-commands", action="store_true")
+    parser.add_argument("--ramp-commands", action="store_true")
+    parser.add_argument("--forward-speed", type=float, help="Override the profile's forward speed")
     parser.add_argument(
         "--strafe-speed", type=float, help="Override the profile's lateral speed"
     )
@@ -45,6 +47,10 @@ def main():
     import robot_lab.tasks  # noqa: F401
 
     commands = (0.3, 0.1, 0.2) if args.low_commands else (0.5, 0.2, 0.6)
+    if args.forward_speed is not None:
+        if not np.isfinite(args.forward_speed):
+            parser.error("forward-speed must be finite")
+        commands = (args.forward_speed, commands[1], commands[2])
     if args.strafe_speed is not None:
         if not np.isfinite(args.strafe_speed):
             parser.error("strafe-speed must be finite")
@@ -65,7 +71,17 @@ def main():
                 if t < 17
                 else [0, 0, commands[2]]
             )
-            self.vel_command_b[:] = torch.tensor(value, device=self.device)
+            target = torch.tensor(value, device=self.device)
+            if args.ramp_commands:
+                reversing = self.vel_command_b * target < 0
+                speeding_up = (~reversing) & (target.abs() > self.vel_command_b.abs())
+                acceleration = torch.tensor(self.cfg.acceleration_limits, device=self.device)
+                deceleration = torch.tensor(self.cfg.deceleration_limits, device=self.device)
+                limit = torch.where(speeding_up, acceleration, deceleration) * self._env.step_dt
+                target = torch.where(reversing, 0.0, target)
+                self.vel_command_b += torch.clamp(target - self.vel_command_b, min=-limit, max=limit)
+            else:
+                self.vel_command_b[:] = target
 
     # Reuse the training launcher's argument defaults and task registry.
     launcher_parser = argparse.ArgumentParser()
@@ -93,6 +109,9 @@ def main():
     cfg.seed = 42
     cfg.commands.base_velocity.class_type = ScriptedCommands
     cfg.commands.base_velocity.debug_vis = False
+    # The scripted timeline owns transitions. Random resampling would otherwise
+    # zero the ramp mid-segment even though the requested command is unchanged.
+    cfg.commands.base_velocity.resampling_time_range = (1.0e9, 1.0e9)
     for name, term in list(vars(cfg.events).items()):
         if getattr(term, "mode", None) == "startup":
             setattr(cfg.events, name, None)
@@ -136,6 +155,7 @@ def main():
                         np.arccos(np.clip(-gravity[2], -1, 1)),
                         *velocity[:2],
                         angular_velocity[2],
+                        *base.command_manager.get_command("base_velocity")[0].cpu().numpy(),
                     ]
                 )
                 resets += int(done.sum())
@@ -151,14 +171,17 @@ def main():
                     [0, 0, commands[2]],
                 ),
             ):
-                values = samples[(samples[:, 0] >= begin) & (samples[:, 0] < end), 3:]
+                selected = samples[(samples[:, 0] >= begin) & (samples[:, 0] < end)]
+                values = selected[:, 3:6]
+                actual_command = selected[:, 6:9]
                 segments.append(
                     {
                         "interval": [begin, end],
-                        "command": command,
+                        "target_command": command,
+                        "command": actual_command.mean(0).tolist(),
                         "mean_velocity": values.mean(0).tolist(),
                         "rmse": np.sqrt(
-                            np.mean((values - command) ** 2, axis=0)
+                            np.mean((values - actual_command) ** 2, axis=0)
                         ).tolist(),
                     }
                 )
@@ -169,6 +192,7 @@ def main():
                 "seed": 42,
                 "startup_randomization": False,
                 "observation_noise": False,
+                "ramp_commands": args.ramp_commands,
                 "seconds": 22,
                 "resets": resets,
                 "min_height": float(samples[:, 1].min()),

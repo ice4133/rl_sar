@@ -6,6 +6,7 @@
 // Exercise the actual ICE states, LibTorch policy and MuJoCo plant without GUI
 // timing. This uses the same pre-inference hook and control order as the viewer.
 #include "fsm_ice_robocon.hpp"
+#include "mujoco_joint_drive.hpp"
 #include <mujoco/mujoco.h>
 #include <filesystem>
 #include <fstream>
@@ -26,7 +27,8 @@ float difference(const std::vector<float>& a, const std::vector<float>& b)
 class Controller : public RL
 {
 public:
-    explicit Controller(const std::string& name = "manual")
+    explicit Controller(const std::string& name = "manual", bool record_pose = false)
+        : record_pose(record_pose)
     {
         robot_name = "ice/robocon";
         ang_vel_axis = "body";
@@ -47,7 +49,11 @@ public:
         const auto output = root / "logs/robocon_diagnostics/fsm";
         std::filesystem::create_directories(output);
         telemetry.open(output / (name + ".csv"));
-        telemetry << "time,stage,cmd_vx,cmd_vy,cmd_wz,height,tilt,state,vx,vy,wz\n";
+        telemetry << "time,stage,cmd_vx,cmd_vy,cmd_wz,height,tilt,state,vx,vy,wz,"
+                     "wheel_dq_fr,wheel_dq_fl,wheel_dq_rr,wheel_dq_rl,max_gyro,stop_guard";
+        if (record_pose)
+            for (int i = 0; i < m->nq; ++i) telemetry << ",qpos_" << i;
+        telemetry << '\n';
     }
 
     std::vector<float> Forward() override { return model->forward({ComputeObservation()}); }
@@ -65,10 +71,13 @@ public:
 
     void SetCommand(const RobotCommand<float>* command) override
     {
+        const bool implicit = UseImplicitMujocoDrive(params.Get<std::string>("mujoco_joint_drive", "explicit"));
+        const auto efforts = params.Get<std::vector<float>>("torque_limits");
         for (int i = 0; i < 16; ++i)
-            d->ctrl[i] = command->motor_command.tau[i]
-                + command->motor_command.kp[i] * (command->motor_command.q[i] - d->sensordata[i])
-                + command->motor_command.kd[i] * (command->motor_command.dq[i] - d->sensordata[16+i]);
+            SetMujocoJointDrive(m.get(), d.get(), i, d->sensordata[i], d->sensordata[16+i],
+                command->motor_command.q[i], command->motor_command.dq[i],
+                command->motor_command.kp[i], command->motor_command.kd[i],
+                command->motor_command.tau[i], efforts[i], implicit);
     }
 
     void Reset()
@@ -138,7 +147,16 @@ public:
         }
         telemetry << d->time << ',' << stage << ',' << control.x << ',' << control.y << ','
                   << control.yaw << ',' << height << ',' << tilt << ',' << StateName() << ','
-                  << actual_velocity[0] << ',' << actual_velocity[1] << ',' << actual_velocity[2] << '\n';
+                  << actual_velocity[0] << ',' << actual_velocity[1] << ',' << actual_velocity[2];
+        for (int wheel : params.Get<std::vector<int>>("wheel_indices"))
+            telemetry << ',' << robot_state.motor_state.dq[wheel];
+        float max_gyro = 0.0f;
+        for (float value : robot_state.imu.gyroscope) max_gyro = std::max(max_gyro, std::abs(value));
+        const auto* state = dynamic_cast<ice_robocon_fsm::State*>(fsm.current_state_.get());
+        telemetry << ',' << max_gyro << ',' << (state && state->motion->Stopped());
+        if (record_pose)
+            for (int i = 0; i < m->nq; ++i) telemetry << ',' << d->qpos[i];
+        telemetry << '\n';
     }
 
     void Run(float seconds, std::array<float, 3> input = {})
@@ -172,12 +190,48 @@ public:
     double min_height = 10.0, max_tilt = 0.0;
     std::array<double, 3> actual_velocity{};
     std::ofstream telemetry;
+    bool record_pose = false;
 };
 
-int main()
+int main(int argc, char** argv)
 {
     try
     {
+        // Diagnostic rollouts use the real state/SDK/control path, including
+        // get-up, policy blending and command ramps. Keep acceptance tests below.
+        if (argc != 1)
+        {
+            require(argc == 7 && std::string(argv[1]) == "--rollout",
+                    "Usage: test_ice_fsm [--rollout name seconds vx vy wz]");
+            const std::string name = argv[2];
+            require(!name.empty() && name.find_first_not_of(
+                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == std::string::npos,
+                    "Rollout name must use letters, digits, underscores or hyphens");
+            const float seconds = std::stof(argv[3]);
+            const std::array<float, 3> command{std::stof(argv[4]), std::stof(argv[5]), std::stof(argv[6])};
+            require(std::isfinite(seconds) && seconds > 3 && seconds <= 120,
+                    "Rollout duration must be in (3, 120] seconds");
+            Controller rollout("rollout_" + name, true);
+            const auto lower = rollout.params.Get<std::vector<float>>("command_limits_lower");
+            const auto upper = rollout.params.Get<std::vector<float>>("command_limits_upper");
+            for (int axis = 0; axis < 3; ++axis)
+                require(std::isfinite(command[axis]) && command[axis] >= lower[axis] && command[axis] <= upper[axis],
+                        "Rollout command outside deployed limits");
+            rollout.Step({}, Input::Keyboard::Num0, false);
+            rollout.Step({}, Input::Keyboard::None, false);
+            rollout.stage = "getup";
+            rollout.Run(2.2f);
+            rollout.Step({}, Input::Keyboard::Num1);
+            rollout.Step();
+            require(rollout.StateName() == "RLFSMStateRLLocomotion", "Rollout policy entry failed");
+            rollout.stage = "handoff";
+            rollout.Run(1.0f);
+            rollout.stage = "rollout_" + name;
+            rollout.Run(seconds, command);
+            std::cout << "ROLLOUT COMPLETE: " << name << "; minimum height=" << rollout.min_height
+                      << "; maximum tilt=" << rollout.max_tilt << '\n';
+            return 0;
+        }
         Controller rl;
         rl.Step({}, Input::Keyboard::Num0, false);
         rl.Step({}, Input::Keyboard::None, false);
@@ -203,7 +257,8 @@ int main()
         rl.stage = "reverse"; rl.Run(4.0f, {-0.5f, 0, 0});
         rl.stage = "combined"; rl.Run(5.0f, {0.5f, 0.2f, 0.4f});
         rl.stage = "turn"; rl.Run(4.0f, {0, 0, 0.6f});
-        rl.stage = "full_forward"; rl.Run(6.0f, {2.0f, 0, 0});
+        const float full_forward = rl.params.Get<std::vector<float>>("command_limits_upper")[0];
+        rl.stage = "full_forward"; rl.Run(6.0f, {full_forward, 0, 0});
         rl.stage = "stop_again"; rl.Run(3.0f);
 
         rl.stage = "pause";

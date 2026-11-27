@@ -7,6 +7,7 @@ PyTorch 2.3.0 to match this project's deployment libraries.
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import re
 import shutil
@@ -272,6 +273,9 @@ def main():
     base = {"dt": env["sim"]["dt"], "decimation": env["decimation"], "num_of_dofs": len(names),
             "initial_keyframe": "home", "camera_track_body": env["base_link_name"],
             "physics_sync_control": True,
+            "mujoco_joint_drive": "implicit" if all(
+                str(cfg["class_type"]).endswith(":ImplicitActuator") for cfg in robot["actuators"].values()
+            ) else "explicit",
             "command_limits_lower": [float(command_ranges[axis][0]) for axis in command_axes],
             "command_limits_upper": [float(command_ranges[axis][1]) for axis in command_axes],
             "fixed_kp": gains, "fixed_kd": damping,
@@ -294,6 +298,15 @@ def main():
     policy_dir = project / "policy/ice/robocon/robot_lab"
     if (policy_dir / "config.yaml").exists() and not args.force:
         parser.error("Robocon configuration already exists; use --force to regenerate")
+    # These settings belong to deployment, rather than the saved training run.
+    base_path = policy_dir.parent / "base.yaml"
+    if base_path.exists():
+        previous_base = read_config(base_path)["ice/robocon"]
+        for key in ("command_acceleration_limits", "command_deceleration_limits",
+                    "getup_duration", "getdown_duration", "policy_transition_duration",
+                    "stop_settle_duration"):
+            if key in previous_base:
+                base[key] = previous_base[key]
     policy_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = run / args.checkpoint
     iteration = export_policy(checkpoint, agent, policy_dir / "policy.pt", config["num_observations"], len(names))
@@ -304,7 +317,10 @@ def main():
     (policy_dir.parent / "base.yaml").write_text(header + yaml.safe_dump({"ice/robocon": base}, sort_keys=False, default_flow_style=None, width=100))
     (policy_dir / "config.yaml").write_text(header + "# Clip processed targets; retain raw actions for the next policy observation.\n"
                                           + yaml.safe_dump({"ice/robocon/robot_lab": config}, sort_keys=False, default_flow_style=None, width=100))
-    metadata = {"task": "RobotLab-Isaac-Velocity-Flat-ICE-Robocon-v0", "checkpoint": str(checkpoint),
+    task = "RobotLab-Isaac-Velocity-Flat-ICE-Robocon-v0"
+    if (run / "run.json").exists():
+        task = json.loads((run / "run.json").read_text()).get("task", task)
+    metadata = {"task": task, "checkpoint": str(checkpoint),
                 "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(), "iteration": iteration,
                 "source_env": str(run / "params/env.yaml"), "source_agent": str(run / "params/agent.yaml"),
                 "source_urdf": str(urdf), "torch_version": str(torch.__version__), "mujoco_version": mujoco.__version__}

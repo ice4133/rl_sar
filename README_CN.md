@@ -223,11 +223,15 @@ ICE Robocon 使用品牌/型号名称 `ice/robocon`。配置和导出的策略�
 
 默认以暂停状态等待手动操作。**点击 MuJoCo 窗口，使其获得键盘焦点**，按 `0` 起立，再按 `Enter` 开始仿真，等待约两秒后按 `1` 启用策略。按住 `W/S` 前后、`A/D` 横移、`Q/E` 转向，以该方向速度上限为目标平滑加速；松键或按住空格后，目标归零并按减速度限制停车，支持组合按键，相反方向相互抵消。键盘没有运动键按住时采用手柄，手柄仍被推动时松键会交回手柄。切换窗口会清除键盘按住状态。`0`/`9` 在策略状态下先减速、等待轮速和角速度稳定，再切换到站立/趴下；`1` 可取消尚未完成的普通停车请求。`P`/手柄 `LB+X` 直接切入阻尼，不等待普通停车。`R` 复位会重新进入当前状态并清除斜坡和旧策略目标；`Enter` 暂停/继续，暂停期间过渡进度保持不变。`--auto-policy` 从初始姿态直接进行平滑策略接管，速度仍由键盘/手柄控制。
 
-键盘和手柄摇杆共用 `policy/ice/robocon/base.yaml` 的 `command_limits_lower/upper`（依次为 vx、vy、wz）。当前范围来自保存的训练配置：前后 ±2.0 m/s、横移 ±0.3 m/s、转向 ±0.8 rad/s；按住 `W` 与左摇杆向前推到底都会以 vx=2.0 m/s 为目标，摇杆半幅约为半速，回中后平滑减速。`command_acceleration_limits` 和 `command_deceleration_limits` 分别控制三个方向的指令加速和减速，单位为 m/s²、m/s²、rad/s²；换向时先减到零，再反向加速。`getup_duration/getdown_duration` 控制起立和趴下时长，`policy_transition_duration` 控制策略接管时长，`stop_settle_duration` 控制普通退出前的稳定等待时间。修改后重启生效。这里限制的是给策略的指令，实际机身速度和停车距离仍由策略及动力学决定。其他机器人的 FSM 和输入处理保持原有行为。
+键盘和手柄摇杆共用 `policy/ice/robocon/base.yaml` 的 `command_limits_lower/upper`（依次为 vx、vy、wz）。当前范围来自保存的第一阶段协调训练配置：前后 ±1.5 m/s、横移 ±0.3 m/s、转向 ±0.8 rad/s；按住 `W` 与左摇杆向前推到底都会以 vx=1.5 m/s 为目标，摇杆半幅约为半速，回中后平滑减速。此阶段尚未扩速到最终的 ±2.5 m/s。`command_acceleration_limits` 和 `command_deceleration_limits` 分别控制三个方向的指令加速和减速，单位为 m/s²、m/s²、rad/s²；换向时先减到零，再反向加速。`getup_duration/getdown_duration` 控制起立和趴下时长，`policy_transition_duration` 控制策略接管时长，`stop_settle_duration` 控制普通退出前的稳定等待时间。修改后重启生效。这里限制的是给策略的指令，实际机身速度和停车距离仍由策略及动力学决定。其他机器人的 FSM 和输入处理保持原有行为。
 
 策略配置在 `policy/ice/robocon/base.yaml` 和 `policy/ice/robocon/robot_lab/config.yaml`；`source.yaml` 记录训练配置来源和 checkpoint 哈希。模型资源位于 `src/rl_sar_zoo/ice/robocon_description/`，其中包含原始 URDF、网格和部署用 MJCF。该资源目录属于单独下载的 `rl_sar_zoo` 仓库，不由本仓库跟踪。
 
+Robocon 当前使用 `mujoco_joint_drive: implicit`，对应训练中的隐式执行器：物理积分器在每个物理步计算 PD 反馈，并对反馈与前馈合力限幅。`explicit` 保留原先按控制周期计算力矩的方式，其他机器人缺省仍使用该方式。导入脚本根据保存的执行器类型生成此项；Python 回放默认读取此项，使用 `--drive explicit` 或 `--drive implicit` 可做对照。驱动反馈形式对齐不表示 Newton 和原生 MuJoCo 的所有动力学差异已经消除。
+
 更新 Robocon 的训练结果时，使用保存的 `params/env.yaml`、`params/agent.yaml` 和 checkpoint 重新导入。脚本复用 `scripts/convert_urdf.py`（来自本地 `unitree_rl_mjlab`），并补齐浮动基座、执行器、传感器、初始姿态和场景；输入 URDF 和训练结果保持原样。
+
+当前部署为 `ice_robocon_native_coordination_v2/2026-11-27_17-04-28_scratch_s42/model_7999.pt`，从零训练，17 项有效奖励函数均与 robot_lab/IsaacLab 原生实现一致。该版评估未通过，详见下文；当前保持为所请求评估的策略。重新导入会保留已有的部署加减速度和状态过渡时长；策略参数仍从该次训练记录生成。
 
 ```bash
 # Ubuntu 本地独立环境：MuJoCo 3.2.7 / CPU PyTorch 2.3.0 / NumPy 1.26.4
@@ -235,21 +239,42 @@ ICE Robocon 使用品牌/型号名称 `ice/robocon`。配置和导出的策略�
 bash scripts/setup_ice_robocon.sh
 
 .venv-deploy/bin/python scripts/import_ice_robocon.py \
-  --run-dir /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_flat/2026-11-24_23-11-40 \
+  --run-dir /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_native_coordination_v2/2026-11-27_17-04-28_scratch_s42 \
   --asset-root /home/jasper/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon \
-  --checkpoint model_4999.pt --force
+  --checkpoint model_7999.pt --force
 
 ./cmake_build/bin/test_ice_robocon
+
+# 驱动实现：旧显式公式兼容、隐式反馈后限幅、轻载轮阻尼稳定性
+cmake --build cmake_build --target test_mujoco_joint_drive -j2
+./cmake_build/bin/test_mujoco_joint_drive
 
 # ICE 状态机闭环：起立、接管、启停、反向、暂停、复位和正常/直接退出
 cmake --build cmake_build --target test_ice_fsm -j2
 ./cmake_build/bin/test_ice_fsm
 
+# 单工况诊断：实际 C++ FSM 起立、平滑接管后，保持横移指令 14 秒
+# 输出 logs/robocon_diagnostics/fsm/rollout_lateral02.csv，含可回放的 qpos
+./cmake_build/bin/test_ice_fsm --rollout lateral02 14 0 0.2 0
+
 # 固定仿真步长回放：站立、前进 0.5、横移 0.2、转向 0.6，共 22 秒
-.venv-deploy/bin/python scripts/eval_ice_robocon.py --video
+.venv-deploy/bin/python scripts/eval_ice_robocon.py --ramp-commands --video
+# 各方向运动后返回零指令，共 34 秒；也可用 --policy-root 指向备份配置做同条件对比
+.venv-deploy/bin/python scripts/eval_ice_robocon.py --ramp-commands --profile stop-start --video \
+  --output logs/robocon_diagnostics/stop_start
 # 原 robot_lab / Newton 环境运行同一策略、同一段指令，关闭随机化和观测噪声
 /home/jasper/robot_lab/.venv/bin/python scripts/compare_ice_robocon_robot_lab.py
 ```
+
+当前 native_coordination_v2 `model_7999` 的评估记录在 `logs/robocon_diagnostics/native_coordination_v2_7999/report.txt`。实际 C++ rl_sar/LibTorch/FSM 跑了26组固定指令，正横移0.3触发倾斜限制、负横移-0.3触发高度限制；其余工况完成运行不代表跟踪合格。前后±1.5实测约+1.449/-1.450，横移±0.2几乎为零，转向±0.6约+0.305/-0.059；混合指令横移和转向分量失效，并有低趴、悬空轮接近30rad/s空转现象。完整启停FSM测试通过，但横移跟踪测试失败。该版比v1明显退化，不宜扩速。`native_grid/`保存C++日志与CSV，`native_video/`保存其姿态轨迹回放，`backup/`保存v1策略和模型。辅助Python回放与原生FSM启动流程不同，其失败计数单独记录。
+
+上一版 native_coordination `model_7999` 的评估记录在 `logs/robocon_diagnostics/native_coordination_7999/report.txt`，含新旧三版相同隐式驱动下的对照、原训练环境对照、录像和有效奖励核查。20 组固定指令未倒地，完整 FSM 测试通过；前后 ±1.5 m/s 实测约 +1.49/-1.45 m/s。但横移 0.2 m/s 实测约 0.116 m/s，低速横移和混合指令欠跟踪，横移时仍有轮速振荡，`test_ice_robocon` 因横移误差超过 0.05 m/s 失败。未放宽判据。原 robot_lab/Newton 横移也约 0.117 m/s，此阶段尚不宜直接扩速。
+
+旧 balanced_commands_resume `model_7999` 的本机评估记录在 `logs/robocon_diagnostics/balanced_7999/`：中速前进、横移和转向跟踪改善，但低速横移、长期静止漂移和正常退出仍有问题。`test_ice_fsm` 在等待正常退出时失败：轮速不能连续 0.3 秒满足停车判据。
+
+旧 `model_9998` 的评估记录在 `logs/robocon_diagnostics/smooth_9998/`。前后 ±2.5 m/s 滚动改善，但横移欠跟踪、部分转向和混合指令倒地；当时原生策略测试与完整 FSM 测试均未通过。`eval_ice_robocon.py` 会保存 `diagnostics.npz`，包含关节目标、实际关节运动和四轮地面法向力；通过 `--ramp-commands` 使用部署加减速斜坡，并通过 `--policy-root` 指定备份策略。
+
+上述 `model_9998` 历史数据基于旧显式 PD。切换隐式驱动后，状态机流程不再复现该次转向倒地，但横移跟踪仍不合格；`test_ice_robocon` 已新增横移误差判据，不能再仅凭转向和不倒地判断通过。驱动改动的记录在 `logs/robocon_diagnostics/native_baseline_setup/`。新的训练基线默认关闭所有自定义奖励，先训练低速协调任务，再使用独立 Speed 任务扩到 ±2.5 m/s；训练命令与单项腾空奖励对照见 `robot_lab/README.md`。
 
 导入脚本仅支持当前 Robocon 的无历史帧、无观测归一化 ELU MLP 策略。它按保存的训练配置展开关节参数和左右轮速度符号，并在动作缩放后裁剪目标；原始动作仍用于下一帧观测。改变策略结构或观测定义时，需要同步适配导入和部署代码。
 

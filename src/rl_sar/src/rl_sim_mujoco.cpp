@@ -5,6 +5,7 @@
 
 #include "rl_sim_mujoco.hpp"
 #include "robot_glfw_adapter.hpp"
+#include "mujoco_joint_drive.hpp"
 
 RL_Sim* RL_Sim::instance = nullptr;
 
@@ -85,6 +86,9 @@ RL_Sim::RL_Sim(int argc, char **argv)
 
     // read params from yaml
     this->ReadYaml(this->robot_name, "base.yaml");
+    const auto drive_mode = params.Get<std::string>("mujoco_joint_drive", "explicit");
+    UseImplicitMujocoDrive(drive_mode);
+    std::cout << LOGGER::INFO << "[MuJoCo] Joint drive: " << drive_mode << std::endl;
     if (this->params.Has("initial_keyframe"))
     {
         const std::lock_guard<std::recursive_mutex> lock(sim->mtx);
@@ -254,12 +258,16 @@ void RL_Sim::SetCommand(const RobotCommand<float> *command)
 {
     if (mj_data)
     {
+        const bool implicit = UseImplicitMujocoDrive(params.Get<std::string>("mujoco_joint_drive", "explicit"));
+        const auto mapping = params.Get<std::vector<int>>("joint_mapping");
+        const auto efforts = params.Get<std::vector<float>>("torque_limits");
         for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
         {
-            mj_data->ctrl[this->params.Get<std::vector<int>>("joint_mapping")[i]] =
-                command->motor_command.tau[i] +
-                command->motor_command.kp[i] * (command->motor_command.q[i] - mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i]]) +
-                command->motor_command.kd[i] * (command->motor_command.dq[i] - mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + this->params.Get<int>("num_of_dofs")]);
+            SetMujocoJointDrive(mj_model, mj_data, mapping[i], mj_data->sensordata[mapping[i]],
+                mj_data->sensordata[mapping[i] + params.Get<int>("num_of_dofs")],
+                command->motor_command.q[i], command->motor_command.dq[i],
+                command->motor_command.kp[i], command->motor_command.kd[i],
+                command->motor_command.tau[i], efforts[i], implicit);
         }
     }
 }
