@@ -225,7 +225,7 @@ ICE Robocon 使用品牌/型号名称 `ice/robocon`。配置和导出的策略�
 
 默认以暂停状态等待手动操作。**点击 MuJoCo 窗口，使其获得键盘焦点**，按 `0` 起立，再按 `Enter` 开始仿真，等待约两秒后按 `1` 启用策略。按住 `W/S` 前后、`A/D` 横移、`Q/E` 转向，以该方向速度上限为目标平滑加速；松键或按住空格后，目标归零并按减速度限制停车，支持组合按键，相反方向相互抵消。键盘没有运动键按住时采用手柄，手柄仍被推动时松键会交回手柄。切换窗口会清除键盘按住状态。`0`/`9` 在策略状态下先减速、等待轮速和角速度稳定，再切换到站立/趴下；`1` 可取消尚未完成的普通停车请求。`P`/手柄 `LB+X` 直接切入阻尼，不等待普通停车。`R` 复位会重新进入当前状态并清除斜坡和旧策略目标；`Enter` 暂停/继续，暂停期间过渡进度保持不变。`--auto-policy` 从初始姿态直接进行平滑策略接管，速度仍由键盘/手柄控制。
 
-键盘和手柄摇杆共用 `policy/ice/robocon/base.yaml` 的 `command_limits_lower/upper`（依次为 vx、vy、wz）。当前范围来自保存的第一阶段协调训练配置：前后 ±1.5 m/s、横移 ±0.3 m/s、转向 ±0.8 rad/s；按住 `W` 与左摇杆向前推到底都会以 vx=1.5 m/s 为目标，摇杆半幅约为半速，回中后平滑减速。此阶段尚未扩速到最终的 ±2.5 m/s。`command_acceleration_limits` 和 `command_deceleration_limits` 分别控制三个方向的指令加速和减速，单位为 m/s²、m/s²、rad/s²；换向时先减到零，再反向加速。`getup_duration/getdown_duration` 控制起立和趴下时长，`policy_transition_duration` 控制策略接管时长，`stop_settle_duration` 控制普通退出前的稳定等待时间。修改后重启生效。这里限制的是给策略的指令，实际机身速度和停车距离仍由策略及动力学决定。其他机器人的 FSM 和输入处理保持原有行为。
+键盘和手柄摇杆共用 `policy/ice/robocon/base.yaml` 的 `command_limits_lower/upper`（依次为 vx、vy、wz）。当前范围来自保存的 Smooth 微调配置：前后 ±2.0 m/s、横移 ±0.3 m/s、转向 ±0.8 rad/s；按住 `W` 与左摇杆向前推到底都会以 vx=2.0 m/s 为目标，摇杆半幅约为半速，回中后平滑减速。此阶段尚未扩速到最终的 ±2.5 m/s。`command_acceleration_limits` 和 `command_deceleration_limits` 分别控制三个方向的指令加速和减速，单位为 m/s²、m/s²、rad/s²；换向时先减到零，再反向加速。`getup_duration/getdown_duration` 控制起立和趴下时长，`policy_transition_duration` 控制策略接管时长，`stop_settle_duration` 控制普通退出前的稳定等待时间。修改后重启生效。这里限制的是给策略的指令，实际机身速度和停车距离仍由策略及动力学决定。其他机器人的 FSM 和输入处理保持原有行为。
 
 策略配置在 `policy/ice/robocon/base.yaml` 和 `policy/ice/robocon/robot_lab/config.yaml`；`source.yaml` 记录训练配置来源和 checkpoint 哈希。模型资源位于 `src/rl_sar_zoo/ice/robocon_description/`，其中包含原始 URDF、网格和部署用 MJCF。该资源目录属于单独下载的 `rl_sar_zoo` 仓库，不由本仓库跟踪。
 
@@ -235,7 +235,7 @@ Robocon 当前使用 `mujoco_joint_drive: implicit`，对应训练中的隐式�
 
 更新 Robocon 的训练结果时，使用保存的 `params/env.yaml`、`params/agent.yaml` 和 checkpoint 重新导入。脚本复用 `scripts/convert_urdf.py`（来自本地 `unitree_rl_mjlab`），并补齐浮动基座、执行器、传感器、初始姿态和场景；输入 URDF 和训练结果保持原样。
 
-当前部署为 `ice_robocon_native_coordination_v2/2026-11-27_17-04-28_scratch_s42/model_7999.pt`，从零训练，17 项有效奖励函数均与 robot_lab/IsaacLab 原生实现一致。该版评估未通过，详见下文；当前保持为所请求评估的策略。重新导入会保留已有的部署加减速度和状态过渡时长；策略参数仍从该次训练记录生成。
+当前部署为 `ice_robocon_smooth_from4999/2026-11-27_20-15-53_target_smooth_airspin_s42/model_7998.pt`，从原始4999微调，20项奖励含原有横移腾空项及新增目标平滑、悬空轮超速约束。原生策略及FSM测试通过；目前跟踪最完整，但横移/混合目标变化和步态风格尚未全面达标。重新导入会保留已有的部署加减速度和状态过渡时长；策略参数仍从该次训练记录生成。
 
 ```bash
 # Ubuntu 本地独立环境：MuJoCo 3.2.7 / CPU PyTorch 2.3.0 / NumPy 1.26.4
@@ -243,9 +243,9 @@ Robocon 当前使用 `mujoco_joint_drive: implicit`，对应训练中的隐式�
 bash scripts/setup_ice_robocon.sh
 
 .venv-deploy/bin/python scripts/import_ice_robocon.py \
-  --run-dir /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_native_coordination_v2/2026-11-27_17-04-28_scratch_s42 \
+  --run-dir /home/jasper/robot_lab/logs/rsl_rl/ice_robocon_smooth_from4999/2026-11-27_20-15-53_target_smooth_airspin_s42 \
   --asset-root /home/jasper/robot_lab/source/robot_lab/robot_lab/assets/data/Robots/ice/robocon \
-  --checkpoint model_7999.pt --force
+  --checkpoint model_7998.pt --force
 
 ./cmake_build/bin/test_ice_robocon
 
@@ -270,7 +270,9 @@ cmake --build cmake_build --target test_ice_fsm -j2
 /home/jasper/robot_lab/.venv/bin/python scripts/compare_ice_robocon_robot_lab.py
 ```
 
-当前 native_coordination_v2 `model_7999` 的评估记录在 `logs/robocon_diagnostics/native_coordination_v2_7999/report.txt`。实际 C++ rl_sar/LibTorch/FSM 跑了26组固定指令，正横移0.3触发倾斜限制、负横移-0.3触发高度限制；其余工况完成运行不代表跟踪合格。前后±1.5实测约+1.449/-1.450，横移±0.2几乎为零，转向±0.6约+0.305/-0.059；混合指令横移和转向分量失效，并有低趴、悬空轮接近30rad/s空转现象。完整启停FSM测试通过，但横移跟踪测试失败。该版比v1明显退化，不宜扩速。`native_grid/`保存C++日志与CSV，`native_video/`保存其姿态轨迹回放，`backup/`保存v1策略和模型。辅助Python回放与原生FSM启动流程不同，其失败计数单独记录。
+当前 Smooth `model_7998` 的记录在 `logs/robocon_diagnostics/smooth_from4999_7998/report.txt`。28组实际C++定点仿真均未触发保护，原生策略与完整FSM验收通过。前后±2实测+1.947/-1.929，横移±0.2实测+0.190/-0.204，转向±0.6实测+0.581/-0.589；混合(0.5,0.2,0.4)约为(0.472,0.181,0.403)。相比原始4999，横移及混合跟踪改善，但低速仍欠跟踪，部分轮速目标变化和离地事件增加，不能宣称所有动作均丝滑。倒退时接触力可能短暂卸载，按原生姿态重算轮底几何末6秒最大离地仅0.58mm，主要仍为滚动。`native_video/`有实际C++姿态回放；`backup/`保存原始4999。
+
+旧 native_coordination_v2 `model_7999` 的评估记录在 `logs/robocon_diagnostics/native_coordination_v2_7999/report.txt`。实际 C++ rl_sar/LibTorch/FSM 跑了26组固定指令，正横移0.3触发倾斜限制、负横移-0.3触发高度限制；其余工况完成运行不代表跟踪合格。前后±1.5实测约+1.449/-1.450，横移±0.2几乎为零，转向±0.6约+0.305/-0.059；混合指令横移和转向分量失效，并有低趴、悬空轮接近30rad/s空转现象。完整启停FSM测试通过，但横移跟踪测试失败。该版比v1明显退化，不宜扩速。`native_grid/`保存C++日志与CSV，`native_video/`保存其姿态轨迹回放，`backup/`保存v1策略和模型。辅助Python回放与原生FSM启动流程不同，其失败计数单独记录。
 
 上一版 native_coordination `model_7999` 的评估记录在 `logs/robocon_diagnostics/native_coordination_7999/report.txt`，含新旧三版相同隐式驱动下的对照、原训练环境对照、录像和有效奖励核查。20 组固定指令未倒地，完整 FSM 测试通过；前后 ±1.5 m/s 实测约 +1.49/-1.45 m/s。但横移 0.2 m/s 实测约 0.116 m/s，低速横移和混合指令欠跟踪，横移时仍有轮速振荡，`test_ice_robocon` 因横移误差超过 0.05 m/s 失败。未放宽判据。原 robot_lab/Newton 横移也约 0.117 m/s，此阶段尚不宜直接扩速。
 
